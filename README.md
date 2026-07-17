@@ -6,7 +6,7 @@
 
 ---
 
-**Autores:** Rafael (Mestrando) / Orientador: Dr. Paulo Silas Servero  
+**Autores:** Rafael de Souza Teixeira (Mestrando) / Orientador: Dr. Paulo Silas Servero  
 **Versão:** 3.0.0 · **Linguagem:** Python 3.10+  
 **Origem:** Refatoração de `migrationf2.2.py` para padrão MVC
 
