@@ -1,0 +1,58 @@
+# ─── Ambiente virtual ────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ─── Cache Python ─────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ─── Dataset CIFAR-10 (muito grande para o Git ~170 MB) ───────────────
+data_cifar10/
+
+# ─── Resultados gerados automaticamente ───────────────────────────────
+fl_results_v15/
+fl_results/
+datasets/
+logs/
+*.png
+*.csv
+*.log
+
+# ─── Arquivos de modelo treinado ──────────────────────────────────────
+*.pt
+*.pth
+*.ckpt
+
+# ─── Arquivos temporários do Code Runner / VS Code ────────────────────
+tempCodeRunnerFile.py
+.vscode/
+.idea/
+*.code-workspace
+
+# ─── Sistema operacional ──────────────────────────────────────────────
+# Windows
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+
+# ─── Jupyter Notebooks (outputs) ──────────────────────────────────────
+.ipynb_checkpoints/
+
+# ─── Distribuição / build ─────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+*.egg

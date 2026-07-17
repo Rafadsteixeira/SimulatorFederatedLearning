@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExperimentConfig",
+  "description": "Esquema de validação para arquivos de configuração de experimento FL (migration_fdl)",
+  "type": "object",
+  "properties": {
+    "n_clients": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Número de clientes FL por round"
+    },
+    "n_rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Número total de rounds federados"
+    },
+    "weight_mode": {
+      "type": "string",
+      "enum": ["random", "fixed"],
+      "description": "Modo de cálculo de pesos/latências: aleatório ou fixo"
+    },
+    "fixed_weights": {
+      "type": "object",
+      "description": "Latências fixas por bs_id (somente quando weight_mode=fixed). Chaves numéricas.",
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0
+      }
+    },
+    "high_latency_periodicity": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "A cada N rounds, inclui clientes de alta latência. 0 = desativado."
+    },
+    "high_latency_fraction": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Fração de clientes de alta latência nos rounds HL"
+    },
+    "seed": {
+      "type": "integer",
+      "description": "Semente aleatória para reprodutibilidade"
+    },
+    "local_epochs": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Número de épocas de treino local por round"
+    },
+    "batch_size": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Tamanho do batch no DataLoader de treino"
+    }
+  },
+  "required": ["n_clients", "n_rounds", "weight_mode"]
+}
+
+

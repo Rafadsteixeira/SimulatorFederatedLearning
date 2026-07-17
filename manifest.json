@@ -1,0 +1,136 @@
+{
+  "project": {
+    "name": "Digital Twin FL — CIFAR-10 com Dijkstra",
+    "version": "3.0.0",
+    "description": "Simulação de Aprendizado Federado em Digital Twin com topologia hexagonal 5x5, roteamento Dijkstra e dataset CIFAR-10. Arquitetura refatorada para MVC orientada a objetos.",
+    "origin_file": "migrationf2.2.py",
+    "author": "Rafael (Mestrando) / Orientador: Dr Paulo Silas Servero",
+    "created_at": "2026-06-17",
+    "language": "Python 3.10+",
+    "architecture": "MVC (Model-View-Controller)"
+  },
+  "structure": {
+    "migration_fdl/": {
+      "description": "Raiz do projeto refatorado",
+      "manifest.json": "Este arquivo — metadados e mapa do projeto",
+      "main.py": "Ponto de entrada da aplicação",
+      "requirements.txt": "Dependências do projeto",
+      "config/": {
+        "description": "Arquivos de configuração de experimento (JSON)",
+        "example_config.json": "Exemplo de configuração de experimento",
+        "schema.json": "Esquema JSON de validação da configuração"
+      },
+      "models/": {
+        "description": "Camada MODEL — entidades de domínio e lógica de negócio",
+        "network/": {
+          "__init__.py": "Exportações da camada de rede",
+          "network_switch.py": "Entidade NetworkSwitch",
+          "base_station.py": "Entidade BaseStation",
+          "edge_server.py": "Entidade EdgeServer",
+          "user.py": "Entidade User",
+          "topology.py": "Entidade Topology (grafo hexagonal)",
+          "topology_builder.py": "Fábrica: constrói topologia hexagonal e calcula Dijkstra"
+        },
+        "federated/": {
+          "__init__.py": "Exportações do módulo federado",
+          "experiment_config.py": "Dataclass ExperimentConfig + from_json",
+          "fl_history.py": "Dataclass FlHistory — histórico de rounds",
+          "cifar_cnn.py": "Modelo CifarCNN (PyTorch nn.Module)",
+          "fl_client.py": "ImageMigrationClient (Flower NumPyClient)",
+          "fl_aggregator.py": "Funções fedavg_aggregate e weighted_average",
+          "dataset_manager.py": "Carregamento e particionamento do CIFAR-10"
+        }
+      },
+      "controllers/": {
+        "description": "Camada CONTROLLER — lógica de coordenação entre Model e View",
+        "__init__.py": "Exportações dos controllers",
+        "app_controller.py": "AppController — orquestra a aplicação toda",
+        "fl_controller.py": "FLController — executa rounds FL em thread separada",
+        "config_controller.py": "ConfigController — carrega/valida JSON de config"
+      },
+      "views/": {
+        "description": "Camada VIEW — interface gráfica Tkinter",
+        "__init__.py": "Exportações das views",
+        "main_window.py": "MainWindow — janela principal, layout e estilo",
+        "control_bar.py": "ControlBar — barra de botões superior",
+        "network_map_view.py": "NetworkMapView — canvas matplotlib da rede",
+        "rounds_panel.py": "RoundsPanel — listbox de rounds + detalhes",
+        "metrics_window.py": "MetricsWindow — janela Toplevel de métricas",
+        "config_dialog.py": "ConfigDialog — diálogo de carregamento de JSON"
+      },
+      "utils/": {
+        "description": "Utilitários compartilhados",
+        "__init__.py": "Exportações dos utilitários",
+        "installer.py": "Auto-instalação de dependências (pip)",
+        "power_model.py": "LinearServerPowerModel e outros modelos",
+        "component_manager.py": "ComponentManager — exportação de cenário JSON"
+      }
+    }
+  },
+  "dependencies": {
+    "runtime": {
+      "matplotlib": ">=3.7",
+      "numpy": ">=1.24",
+      "networkx": ">=3.1",
+      "torch": ">=2.0",
+      "torchvision": ">=0.15",
+      "flwr": ">=1.5",
+      "Pillow": ">=10.0"
+    },
+    "stdlib": [
+      "tkinter",
+      "threading",
+      "json",
+      "os",
+      "random",
+      "subprocess",
+      "sys",
+      "urllib.request",
+      "tempfile",
+      "dataclasses",
+      "typing",
+      "collections"
+    ]
+  },
+  "mvc_responsibility": {
+    "Model": [
+      "Entidades de domínio: NetworkSwitch, BaseStation, EdgeServer, User, Topology",
+      "Configuração do experimento: ExperimentConfig",
+      "Histórico FL: FlHistory",
+      "Rede neural: CifarCNN",
+      "Cliente federado: ImageMigrationClient",
+      "Agregação FedAvg: fl_aggregator",
+      "Dados CIFAR-10: DatasetManager"
+    ],
+    "View": [
+      "Janela principal: MainWindow",
+      "Barra de controle: ControlBar",
+      "Mapa de rede (matplotlib): NetworkMapView",
+      "Painel de rounds: RoundsPanel",
+      "Janela de métricas: MetricsWindow",
+      "Diálogos: ConfigDialog"
+    ],
+    "Controller": [
+      "Orquestração geral: AppController",
+      "Execução FL em thread: FLController",
+      "Carga e validação de JSON: ConfigController"
+    ]
+  },
+  "data_flow": {
+    "startup": "main.py → AppController.start() → MainWindow.build() → FLController/ConfigController bind",
+    "load_dataset": "ControlBar (View) → AppController → FLController → DatasetManager (Model) → NetworkMapView.refresh()",
+    "train_fl": "ControlBar (View) → FLController.run_in_thread() → FL rounds (Model) → RoundsPanel.append() (View)",
+    "load_config": "ControlBar (View) → ConfigController.load_json() → ExperimentConfig (Model) → ConfigPanel.refresh() (View)",
+    "show_metrics": "ControlBar (View) → MetricsWindow(fl_history) (View)"
+  },
+  "entry_point": "main.py",
+  "run_command": "python main.py",
+  "notes": [
+    "Todos os globals do arquivo original foram eliminados e encapsulados em classes.",
+    "A comunicação View→Controller se dá via callbacks injetados no construtor das Views.",
+    "A comunicação Controller→View se dá via métodos públicos e o método window.after() do Tkinter.",
+    "O reset de entidades (NetworkSwitch._reset etc.) é gerenciado pelo TopologyBuilder.",
+    "O servidor central e o grafo Dijkstra são construídos no AppController.start()."
+  ]
+}
+
