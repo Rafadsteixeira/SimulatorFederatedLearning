@@ -1,10 +1,10 @@
 {
-  "_comment": "Arquivo de configuração do experimento FL — migration_fdl",
+  "_comment": "Arquivo de configura??o do experimento FL ? SimulatorFederatedLearning",
   "n_clients": 5,
   "n_rounds": 5,
-  "weight_mode": "random",
+  "delay_mode": "random",
   "fixed_weights": {
-    "_comment": "Usado apenas quando weight_mode = fixed. Chave = bs_id (string), valor = latência em ms",
+    "_comment": "Usado apenas quando delay_mode = fixed. Chave = bs_id (string), valor = lat?ncia em ms",
     "1": 2.5,
     "2": 5.1,
     "3": 1.8,
@@ -23,5 +23,3 @@
   "local_epochs": 1,
   "batch_size": 32
 }
-
-

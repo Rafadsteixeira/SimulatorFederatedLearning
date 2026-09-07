@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 models/federated/fl_history.py
-FlHistory — armazena métricas de todos os rounds de um experimento FL.
+FLHistory — armazena métricas de todos os rounds de um experimento FL.
 """
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
 
 @dataclass
-class FlHistory:
+class FLHistory:
     """
     Histórico de métricas de um experimento de Aprendizado Federado.
 

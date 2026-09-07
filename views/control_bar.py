@@ -38,9 +38,9 @@ class ControlBar(ttk.Frame):
         )
         self._load_btn.pack(side=tk.LEFT, padx=4)
 
-        # --- Botão: Treinar FL ---
+        # --- Botão: Treinar Modelo ---
         self._fl_btn = ttk.Button(
-            self, text="Treinar FL (Dijkstra)", command=on_start_training
+            self, text="Treinar Modelo", command=on_start_training
         )
         self._fl_btn.pack(side=tk.LEFT, padx=4)
 
