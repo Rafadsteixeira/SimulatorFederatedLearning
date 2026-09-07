@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 controllers/app_controller.py
-AppController — orquestra toda a aplicação: cria os models, inicializa a
+AppController â€” orquestra toda a aplicaÃ§Ã£o: cria os models, inicializa a
 topologia e conecta controllers e views.
 """
 import os
@@ -17,7 +17,7 @@ from .config_controller import ConfigController
 
 class AppController:
     """
-    Ponto central de coordenação da aplicação MVC.
+    Ponto central de coordenaÃ§Ã£o da aplicaÃ§Ã£o MVC.
 
     Responsabilidades:
         1. Construir a topologia de rede (TopologyBuilder).
@@ -35,7 +35,7 @@ class AppController:
     DATA_DIR    = "./data_cifar10"
 
     def __init__(self) -> None:
-        # Limpeza de arquivo temporário gerado pelo Code Runner
+        # Limpeza de arquivo temporÃ¡rio gerado pelo Code Runner
         if os.path.exists("tempCodeRunnerFile.py"):
             os.remove("tempCodeRunnerFile.py")
 
@@ -73,17 +73,17 @@ class AppController:
             on_dataset_loaded=self._on_dataset_loaded,
         )
 
-        # Referência à View (injetada em start())
+        # ReferÃªncia Ã  View (injetada em start())
         self._window = None
 
     # ------------------------------------------------------------------
-    # Inicialização
+    # InicializaÃ§Ã£o
     # ------------------------------------------------------------------
 
     def start(self) -> None:
         """
-        Constrói a janela principal (View) e inicia o mainloop Tkinter.
-        Importado aqui para evitar dependência circular no topo do módulo.
+        ConstrÃ³i a janela principal (View) e inicia o mainloop Tkinter.
+        Importado aqui para evitar dependÃªncia circular no topo do mÃ³dulo.
         """
         from views.main_window import MainWindow
 
@@ -96,10 +96,10 @@ class AppController:
             on_show_metrics=self._handle_show_metrics,
         )
 
-        print("  Interface carregada. Use os botões para:")
-        print("  1. 'Carregar CIFAR-10' → baixa dataset e exibe thumbnails nos nós")
-        print("  2. 'Treinar FL (Dijkstra)' → executa rounds federados")
-        print("  3. 'Ver Métricas FL' → gráficos de convergência\n")
+        print("  Interface carregada. Use os botÃµes para:")
+        print("  1. 'Carregar CIFAR-10' â†’ baixa dataset e exibe thumbnails nos nÃ³s")
+        print("  2. 'Treinar Modelo' â†’ executa rounds federados")
+        print("  3. 'Ver MÃ©tricas FL' â†’ grÃ¡ficos de convergÃªncia\n")
 
         self._window.mainloop()
 
@@ -113,30 +113,30 @@ class AppController:
 
     def _handle_start_training(self) -> None:
         """
-        Valida pré-condições e delega treinamento ao FLController.
-        Exibe aviso se dataset não foi carregado.
+        Valida prÃ©-condiÃ§Ãµes e delega treinamento ao FLController.
+        Exibe aviso se dataset nÃ£o foi carregado.
         """
         if not self._dataset_manager.is_loaded:
             if self._window:
                 self._window.show_warning(
-                    "Atenção",
+                    "AtenÃ§Ã£o",
                     "Carregue o dataset CIFAR-10 primeiro\n"
-                    "(botão 'Carregar CIFAR-10').",
+                    "(botÃ£o 'Carregar CIFAR-10').",
                 )
             return
 
         cfg = self._config_ctrl.get_config()
 
-        # Avisa se está usando padrões
+        # Avisa se estÃ¡ usando padrÃµes
         if self._config_ctrl.active_config is None:
             defaults = ExperimentConfig()
             if self._window:
                 ok = self._window.ask_yes_no(
-                    "Sem configuração JSON",
+                    "Sem configuraÃ§Ã£o JSON",
                     f"Nenhum JSON carregado.\n"
-                    f"Usar padrões: {defaults.n_clients} clientes, "
-                    f"{defaults.n_rounds} rounds, modo '{defaults.weight_mode}'.\n\n"
-                    "Deseja continuar? (clique 'Não' para carregar um JSON primeiro)",
+                    f"Usar padrÃµes: {defaults.n_clients} clientes, "
+                    f"{defaults.n_rounds} rounds, modo '{defaults.delay_mode}'.\n\n"
+                    "Deseja continuar? (clique 'NÃ£o' para carregar um JSON primeiro)",
                 )
                 if not ok:
                     return
@@ -147,13 +147,13 @@ class AppController:
         self._fl_ctrl.start_training(cfg)
 
     def _handle_show_metrics(self) -> None:
-        """Abre a janela de métricas se houver histórico disponível."""
+        """Abre a janela de mÃ©tricas se houver histÃ³rico disponÃ­vel."""
         if self._window:
             history = self._fl_ctrl.fl_history
             if history is None or history.is_empty():
                 self._window.show_info(
-                    "Métricas FL",
-                    "Nenhuma métrica disponível.\n"
+                    "MÃ©tricas FL",
+                    "Nenhuma mÃ©trica disponÃ­vel.\n"
                     "Execute o treinamento FL primeiro.",
                 )
                 return
@@ -163,7 +163,7 @@ class AppController:
             )
 
     # ------------------------------------------------------------------
-    # Callbacks dos sub-controllers → View
+    # Callbacks dos sub-controllers â†’ View
     # ------------------------------------------------------------------
 
     def _on_status(self, message: str) -> None:
@@ -208,3 +208,4 @@ class AppController:
     def _on_error(self, title: str, message: str) -> None:
         if self._window:
             self._window.show_error(title, message)
+

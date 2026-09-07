@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from models.network.topology_builder import TopologyResult
     from models.federated.dataset_manager import DatasetManager
     from models.federated.experiment_config import ExperimentConfig
-    from models.federated.fl_history import FlHistory
+    from models.federated.fl_history import FLHistory
 
 from .control_bar import ControlBar
 from .network_map_view import NetworkMapView
@@ -157,7 +157,7 @@ class MainWindow:
         )
 
     def open_metrics_window(
-        self, history: "FlHistory", results_dir: str
+        self, history: "FLHistory", results_dir: str
     ) -> None:
         """Abre a janela de métricas FL."""
         from .metrics_window import MetricsWindow

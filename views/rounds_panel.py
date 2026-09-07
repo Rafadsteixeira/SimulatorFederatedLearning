@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 views/rounds_panel.py
-RoundsPanel — painel lateral com listbox de rounds e detalhes do round selecionado.
+RoundsPanel â€” painel lateral com listbox de rounds e detalhes do round selecionado.
 """
 from __future__ import annotations
 from typing import Dict, List, Optional
@@ -16,7 +16,7 @@ class RoundsPanel(ttk.Frame):
         - Lista scrollable de rounds FL (RoundsListbox).
         - Painel de detalhes do round selecionado.
 
-    O painel é passivo: recebe dados via append_round() e clear().
+    O painel Ã© passivo: recebe dados via append_round() e clear().
     """
 
     def __init__(self, parent, total_rounds: int = 5, **kwargs) -> None:
@@ -28,7 +28,7 @@ class RoundsPanel(ttk.Frame):
         self._build()
 
     # ------------------------------------------------------------------
-    # Construção
+    # ConstruÃ§Ã£o
     # ------------------------------------------------------------------
 
     def _build(self) -> None:
@@ -70,15 +70,15 @@ class RoundsPanel(ttk.Frame):
         ).pack(fill=tk.X)
 
     # ------------------------------------------------------------------
-    # API pública
+    # API pÃºblica
     # ------------------------------------------------------------------
 
     def append_round(self, entry: Dict) -> None:
         """
-        Adiciona um round à lista.
+        Adiciona um round Ã  lista.
 
         Args:
-            entry: Dicionário com métricas do round (mesmo formato do fl_round_log).
+            entry: DicionÃ¡rio com mÃ©tricas do round (mesmo formato do fl_round_log).
         """
         self._round_log.append(entry)
 
@@ -86,8 +86,8 @@ class RoundsPanel(ttk.Frame):
         acc  = entry["val_acc"] * 100
         loss = entry["val_loss"]
         n    = entry["n_clients"]
-        mode = entry.get("weight_mode", "?")[0].upper()
-        hl   = " ⚠" if entry.get("is_hl_round") else ""
+        mode = entry.get("delay_mode", "?")[0].upper()
+        hl   = " âš " if entry.get("is_hl_round") else ""
         line = f" R{r:>2} [{mode}]{hl}  Loss {loss:.4f}  Acc {acc:5.1f}%  C:{n}"
 
         self._listbox.insert(tk.END, line)
@@ -124,7 +124,7 @@ class RoundsPanel(ttk.Frame):
 
     def _show_details(self, idx: int) -> None:
         if idx < 0 or idx >= len(self._round_log):
-            self._details_var.set("Nenhum dado disponível.")
+            self._details_var.set("Nenhum dado disponÃ­vel.")
             return
 
         e = self._round_log[idx]
@@ -147,13 +147,13 @@ class RoundsPanel(ttk.Frame):
             delta_loss_str = f"  ({sign_l}{d_loss:.4f})"
             delta_acc_str  = f"  ({sign_a}{d_acc:.2f}%)"
 
-        mode  = e.get("weight_mode", "?").upper()
+        mode  = e.get("delay_mode", "?").upper()
         is_hl = e.get("is_hl_round", False)
         sep   = "=" * 31
 
         lines = [
             f"+{sep}+",
-            f"  Rodada  : {r} / {self._total_rounds}  [{mode}]{'  ⚠ HL' if is_hl else ''}",
+            f"  Rodada  : {r} / {self._total_rounds}  [{mode}]{'  âš  HL' if is_hl else ''}",
             f"  Clientes: {n_cli}",
             f"  Amostras: {samples:,}",
             f"+{sep}+",
@@ -165,7 +165,7 @@ class RoundsPanel(ttk.Frame):
             f"  Loss  : {vl:.4f}{delta_loss_str}",
             f"  Acc   : {va:.2f}%{delta_acc_str}",
             f"+{sep}+",
-            f"  CLIENTES (latência {mode})",
+            f"  CLIENTES (latÃªncia {mode})",
         ]
 
         for cd in e.get("clients_detail", []):
@@ -181,3 +181,4 @@ class RoundsPanel(ttk.Frame):
 
         lines.append(f"+{sep}+")
         self._details_var.set("\n".join(lines))
+

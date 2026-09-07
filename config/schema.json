@@ -1,27 +1,27 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ExperimentConfig",
-  "description": "Esquema de validação para arquivos de configuração de experimento FL (migration_fdl)",
+  "description": "Esquema de valida??o para arquivos de configura??o de experimento FL (SimulatorFederatedLearning)",
   "type": "object",
   "properties": {
     "n_clients": {
       "type": "integer",
       "minimum": 1,
-      "description": "Número de clientes FL por round"
+      "description": "N?mero de clientes FL por round"
     },
     "n_rounds": {
       "type": "integer",
       "minimum": 1,
-      "description": "Número total de rounds federados"
+      "description": "N?mero total de rounds federados"
     },
-    "weight_mode": {
+    "delay_mode": {
       "type": "string",
       "enum": ["random", "fixed"],
-      "description": "Modo de cálculo de pesos/latências: aleatório ou fixo"
+      "description": "Modo de c?lculo de lat?ncias: aleat?rio ou fixo"
     },
     "fixed_weights": {
       "type": "object",
-      "description": "Latências fixas por bs_id (somente quando weight_mode=fixed). Chaves numéricas.",
+      "description": "Lat?ncias fixas por bs_id (somente quando delay_mode=fixed). Chaves num?ricas.",
       "additionalProperties": {
         "type": "number",
         "minimum": 0
@@ -30,22 +30,22 @@
     "high_latency_periodicity": {
       "type": "integer",
       "minimum": 0,
-      "description": "A cada N rounds, inclui clientes de alta latência. 0 = desativado."
+      "description": "A cada N rounds, inclui clientes de alta lat?ncia. 0 = desativado."
     },
     "high_latency_fraction": {
       "type": "number",
       "minimum": 0.0,
       "maximum": 1.0,
-      "description": "Fração de clientes de alta latência nos rounds HL"
+      "description": "Fra??o de clientes de alta lat?ncia nos rounds HL"
     },
     "seed": {
       "type": "integer",
-      "description": "Semente aleatória para reprodutibilidade"
+      "description": "Semente aleat?ria para reprodutibilidade"
     },
     "local_epochs": {
       "type": "integer",
       "minimum": 1,
-      "description": "Número de épocas de treino local por round"
+      "description": "N?mero de ?pocas de treino local por round"
     },
     "batch_size": {
       "type": "integer",
@@ -53,7 +53,5 @@
       "description": "Tamanho do batch no DataLoader de treino"
     }
   },
-  "required": ["n_clients", "n_rounds", "weight_mode"]
+  "required": ["n_clients", "n_rounds", "delay_mode"]
 }
-
-

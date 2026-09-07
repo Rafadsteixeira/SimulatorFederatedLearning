@@ -19,7 +19,7 @@ import tkinter as tk
 from tkinter import ttk
 
 if TYPE_CHECKING:
-    from models.federated.fl_history import FlHistory
+    from models.federated.fl_history import FLHistory
 
 
 class MetricsWindow(tk.Toplevel):
@@ -34,14 +34,14 @@ class MetricsWindow(tk.Toplevel):
 
     Args:
         parent:      Widget pai (MainWindow).
-        history:     FlHistory com as métricas do experimento.
+        history:     FLHistory com as métricas do experimento.
         results_dir: Diretório para salvar o PNG.
     """
 
     def __init__(
         self,
         parent,
-        history: "FlHistory",
+        history: "FLHistory",
         results_dir: str = "./fl_results_v15",
     ) -> None:
         super().__init__(parent)
