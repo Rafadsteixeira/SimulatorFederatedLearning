@@ -1,4 +1,4 @@
-# Digital Twin FL — CIFAR-10 com Dijkstra
+﻿# Digital Twin FL — CIFAR-10 com Dijkstra
 
 > **Simulação de Aprendizado Federado em Digital Twin**  
 > Topologia hexagonal 5×5 · Roteamento Dijkstra · Dataset CIFAR-10  

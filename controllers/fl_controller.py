@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 controllers/fl_controller.py
-FLController — orquestra os rounds de Aprendizado Federado em thread separada.
+FLController â€” orquestra os rounds de Aprendizado Federado em thread separada.
 """
 import random
 import threading
@@ -14,7 +14,7 @@ from models.network.base_station import BaseStation
 from models.network.network_switch import NetworkSwitch
 from models.network.topology import Topology
 from models.federated.experiment_config import ExperimentConfig
-from models.federated.fl_history import FlHistory
+from models.federated.fl_history import FLHistory
 from models.federated.cifar_cnn import CifarCNN, get_weights, set_weights
 from models.federated.fl_client import ImageMigrationClient
 from models.federated.fl_aggregator import fedavg_aggregate, weighted_average
@@ -23,7 +23,7 @@ from models.federated.dataset_manager import DatasetManager
 
 class FLController:
     """
-    Controla a execução do treinamento FL:
+    Controla a execuÃ§Ã£o do treinamento FL:
         - Carrega o dataset (em thread).
         - Particiona dados pelos clientes.
         - Executa os rounds FL com FedAvg.
@@ -31,8 +31,8 @@ class FLController:
 
     Callbacks injetados:
         on_status(msg):                Atualiza o label de status na View.
-        on_round_complete(entry):      Adiciona entry à lista de rounds na View.
-        on_training_done():            Habilita botões ao finalizar.
+        on_round_complete(entry):      Adiciona entry Ã  lista de rounds na View.
+        on_training_done():            Habilita botÃµes ao finalizar.
         on_map_refresh():              Atualiza o mapa de rede.
         on_round_list_clear():         Limpa a listbox de rounds.
         on_error(title, msg):          Exibe mensagem de erro.
@@ -74,14 +74,14 @@ class FLController:
 
         # Estado interno
         self.global_model: CifarCNN = CifarCNN()
-        self.fl_history: Optional[FlHistory] = None
+        self.fl_history: Optional[FLHistory] = None
         self.fl_round_log: List[Dict] = []
         self.fl_clients: List[ImageMigrationClient] = []
         self.is_model_ready: bool = False
-        self.training_status: str = "Não treinado"
+        self.training_status: str = "NÃ£o treinado"
 
     # ------------------------------------------------------------------
-    # API pública
+    # API pÃºblica
     # ------------------------------------------------------------------
 
     def start_load_dataset(self) -> None:
@@ -93,7 +93,7 @@ class FLController:
         Inicia o treinamento FL em thread separada.
 
         Args:
-            cfg: Configuração do experimento a usar.
+            cfg: ConfiguraÃ§Ã£o do experimento a usar.
         """
         threading.Thread(
             target=self._training_thread,
@@ -110,7 +110,7 @@ class FLController:
         self.dataset_manager.load_sample_images(self.client_stations)
         n_train = len(self.dataset_manager.trainset) if self.dataset_manager.trainset else 0
         n_imgs  = len(self.client_stations)
-        self._on_status("Dataset pronto ✓")
+        self._on_status("Dataset pronto âœ“")
         self._on_map_refresh()
         self._on_dataset_loaded(n_train, n_imgs)
         self._on_training_done()
@@ -127,7 +127,7 @@ class FLController:
             self._on_training_done()
 
     # ------------------------------------------------------------------
-    # Lógica principal de treinamento
+    # LÃ³gica principal de treinamento
     # ------------------------------------------------------------------
 
     def _run_training(self, cfg: ExperimentConfig) -> None:
@@ -151,7 +151,7 @@ class FLController:
         self._on_status("Particionando dataset...")
         partitions = self.dataset_manager.partition(n_total)
 
-        # --- Criação de clientes ---
+        # --- CriaÃ§Ã£o de clientes ---
         sorted_all = sorted(
             all_stations,
             key=lambda b: self.dijkstra_distances.get(b.network_switch, float("inf")),
@@ -170,8 +170,8 @@ class FLController:
         n_clients = min(cfg.n_clients, n_total)
 
         print("\n" + "=" * 64)
-        print("  APRENDIZADO FEDERADO — CIFAR-10")
-        print(f"  Modo pesos    : {cfg.weight_mode.upper()}")
+        print("  APRENDIZADO FEDERADO â€” CIFAR-10")
+        print(f"  Modo pesos    : {cfg.delay_mode.upper()}")
         print(f"  Clientes/round: {n_clients}  (pool={n_total})")
         print(f"  Rounds        : {cfg.n_rounds}")
         if cfg.high_latency_periodicity > 0:
@@ -183,11 +183,11 @@ class FLController:
         print("=" * 64)
 
         # --- Loop de rounds ---
-        history = FlHistory(num_rounds=cfg.n_rounds, num_clients=n_clients)
+        history = FLHistory(num_rounds=cfg.n_rounds, num_clients=n_clients)
         global_weights = get_weights(self.global_model)
 
         for round_num in range(1, cfg.n_rounds + 1):
-            self._on_status(f"Round {round_num}/{cfg.n_rounds} [{cfg.weight_mode}]...")
+            self._on_status(f"Round {round_num}/{cfg.n_rounds} [{cfg.delay_mode}]...")
 
             round_dijkstra = self._build_round_dijkstra(cfg)
 
@@ -199,8 +199,8 @@ class FLController:
             n_this = len(clients)
 
             print(
-                f"\n  ── Round {round_num}/{cfg.n_rounds} "
-                f"[{cfg.weight_mode}]{'  ⚠ HL' if is_hl else ''} ──"
+                f"\n  â”€â”€ Round {round_num}/{cfg.n_rounds} "
+                f"[{cfg.delay_mode}]{'  âš  HL' if is_hl else ''} â”€â”€"
             )
 
             # Treino local
@@ -221,16 +221,16 @@ class FLController:
                     "acc":     fit_m.get("train_acc",  0.0),
                 })
 
-            # Agregação FedAvg
+            # AgregaÃ§Ã£o FedAvg
             global_weights = fedavg_aggregate(fit_results)
             set_weights(self.global_model, global_weights)
             total_samples = sum(n for n, _ in fit_results)
-            print(f"  Servidor: FedAvg → {n_this} clientes ({total_samples} amostras)")
+            print(f"  Servidor: FedAvg â†’ {n_this} clientes ({total_samples} amostras)")
 
             agg_fit = weighted_average(fit_metrics_ag)
             history.add_fit_metrics(round_num, agg_fit)
 
-            # Avaliação
+            # AvaliaÃ§Ã£o
             eval_losses, eval_metrics_ag = [], []
             for client in clients:
                 loss, n_val, eval_m = client.evaluate(
@@ -247,13 +247,13 @@ class FLController:
             history.add_eval_metrics(round_num, agg_eval)
 
             acc_pct = agg_eval.get("accuracy", 0.0) * 100
-            print(f"  Round {round_num} — Loss: {agg_loss:.4f} | Ac.: {acc_pct:.2f}%")
+            print(f"  Round {round_num} â€” Loss: {agg_loss:.4f} | Ac.: {acc_pct:.2f}%")
 
             # Notifica a View
             entry = {
                 "round":          round_num,
                 "n_clients":      n_this,
-                "weight_mode":    cfg.weight_mode,
+                "delay_mode":    cfg.delay_mode,
                 "is_hl_round":    is_hl,
                 "total_samples":  total_samples,
                 "train_loss":     agg_fit.get("train_loss", 0.0),
@@ -265,29 +265,29 @@ class FLController:
             self.fl_round_log.append(entry)
             self._on_round_complete(entry)
 
-        # Finalização
+        # FinalizaÃ§Ã£o
         self.fl_history = history
         self.is_model_ready = True
-        self.training_status = "Modelo pronto ✓"
-        self._on_status("Modelo pronto ✓")
+        self.training_status = "Modelo pronto âœ“"
+        self._on_status("Modelo pronto âœ“")
         self._on_map_refresh()
 
         print("\n" + "=" * 64)
-        print("  FL com imagens concluído!")
+        print("  FL com imagens concluÃ­do!")
         print(history.summary())
         print("=" * 64 + "\n")
 
     # ------------------------------------------------------------------
-    # Métodos auxiliares de roteamento e seleção
+    # MÃ©todos auxiliares de roteamento e seleÃ§Ã£o
     # ------------------------------------------------------------------
 
     def _build_round_dijkstra(self, cfg: ExperimentConfig) -> Dict:
         """
-        Recalcula distâncias Dijkstra para o round atual.
+        Recalcula distÃ¢ncias Dijkstra para o round atual.
         Modo 'random': reatribui delays aleatoriamente.
-        Modo 'fixed':  usa latências fixas da configuração.
+        Modo 'fixed':  usa latÃªncias fixas da configuraÃ§Ã£o.
         """
-        if cfg.weight_mode == "random":
+        if cfg.delay_mode == "random":
             import random as _random
             for u, v in self.topology.edges():
                 self.topology.edges[u, v]["delay"]     = round(_random.uniform(1, 5), 2)
@@ -316,7 +316,7 @@ class FLController:
     ):
         """
         Seleciona os clientes para o round atual.
-        Em rounds de alta-latência, mistura clientes próximos e distantes.
+        Em rounds de alta-latÃªncia, mistura clientes prÃ³ximos e distantes.
 
         Returns:
             (lista_de_BSs, is_hl_round)
@@ -335,10 +335,11 @@ class FLController:
             n_normal = n_clients - n_high
             selected = sorted_asc[:n_normal] + sorted_asc[-n_high:]
             print(
-                f"  [Round {round_num}] ⚠ Alta-latência: "
+                f"  [Round {round_num}] âš  Alta-latÃªncia: "
                 f"{n_high} clientes HL + {n_normal} normais"
             )
         else:
             selected = sorted_asc[:n_clients]
 
         return selected, is_hl
+

@@ -34,7 +34,7 @@
         "federated/": {
           "__init__.py": "Exportações do módulo federado",
           "experiment_config.py": "Dataclass ExperimentConfig + from_json",
-          "fl_history.py": "Dataclass FlHistory — histórico de rounds",
+          "fl_history.py": "Dataclass FLHistory — histórico de rounds",
           "cifar_cnn.py": "Modelo CifarCNN (PyTorch nn.Module)",
           "fl_client.py": "ImageMigrationClient (Flower NumPyClient)",
           "fl_aggregator.py": "Funções fedavg_aggregate e weighted_average",
@@ -62,7 +62,7 @@
         "description": "Utilitários compartilhados",
         "__init__.py": "Exportações dos utilitários",
         "installer.py": "Auto-instalação de dependências (pip)",
-        "power_model.py": "LinearServerPowerModel e outros modelos",
+        "power_model.py": "ServerPowerModel e outros modelos",
         "component_manager.py": "ComponentManager — exportação de cenário JSON"
       }
     }
@@ -96,7 +96,7 @@
     "Model": [
       "Entidades de domínio: NetworkSwitch, BaseStation, EdgeServer, User, Topology",
       "Configuração do experimento: ExperimentConfig",
-      "Histórico FL: FlHistory",
+      "Histórico FL: FLHistory",
       "Rede neural: CifarCNN",
       "Cliente federado: ImageMigrationClient",
       "Agregação FedAvg: fl_aggregator",

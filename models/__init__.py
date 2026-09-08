@@ -7,14 +7,14 @@ from .network import (
     NetworkSwitch, BaseStation, EdgeServer, User, Topology, TopologyBuilder
 )
 from .federated import (
-    ExperimentConfig, FlHistory, CifarCNN, get_weights, set_weights,
+    ExperimentConfig, FLHistory, CifarCNN, get_weights, set_weights,
     ImageMigrationClient, fedavg_aggregate, weighted_average, DatasetManager
 )
 
 __all__ = [
     "NetworkSwitch", "BaseStation", "EdgeServer", "User",
     "Topology", "TopologyBuilder",
-    "ExperimentConfig", "FlHistory",
+    "ExperimentConfig", "FLHistory",
     "CifarCNN", "get_weights", "set_weights",
     "ImageMigrationClient",
     "fedavg_aggregate", "weighted_average",
