@@ -1,65 +1,65 @@
-﻿# Digital Twin FL â€” CIFAR-10 com Dijkstra
+﻿# Digital Twin FL — CIFAR-10 com Dijkstra
 
-> **SimulaÃ§Ã£o de Aprendizado Federado em Digital Twin**  
-> Topologia hexagonal 5Ã—5 Â· Roteamento Dijkstra Â· Dataset CIFAR-10  
+> **Simulação de Aprendizado Federado em Digital Twin**  
+> Topologia hexagonal 5×5 · Roteamento Dijkstra · Dataset CIFAR-10  
 > Arquitetura **MVC orientada a objetos** em Python
 
 ---
 
 **Autores:** Rafael de Souza Teixeira (Mestrando) / Orientador: Dr. Paulo Silas Servero  
-**VersÃ£o:** 3.0.0 Â· **Linguagem:** Python 3.10+  
-**Origem:** RefatoraÃ§Ã£o de `migrationf2.2.py` para padrÃ£o MVC
+**Versão:** 3.0.0 · **Linguagem:** Python 3.10+  
+**Origem:** Refatoração de `migrationf2.2.py` para padrão MVC
 
 ---
 
-## Ãndice
+## Índice
 
-- [VisÃ£o Geral](#visÃ£o-geral)
-- [PrÃ©-requisitos](#prÃ©-requisitos)
-- [InstalaÃ§Ã£o](#instalaÃ§Ã£o)
+- [Visão Geral](#visão-geral)
+- [Pré-requisitos](#pré-requisitos)
+- [Instalação](#instalação)
 - [Como Executar](#como-executar)
 - [Estrutura do Projeto](#estrutura-do-projeto)
-- [Arquivos de ConfiguraÃ§Ã£o](#arquivos-de-configuraÃ§Ã£o)
-- [Interface GrÃ¡fica](#interface-grÃ¡fica)
+- [Arquivos de Configuração](#arquivos-de-configuração)
+- [Interface Gráfica](#interface-gráfica)
 - [Arquitetura MVC](#arquitetura-mvc)
-- [ConfiguraÃ§Ã£o do GitHub](#configuraÃ§Ã£o-do-github)
+- [Configuração do GitHub](#configuração-do-github)
 - [Contribuindo](#contribuindo)
-- [LicenÃ§a](#licenÃ§a)
+- [Licença](#licença)
 
 ---
 
-## VisÃ£o Geral
+## Visão Geral
 
-Este projeto implementa um **Digital Twin** de uma rede mÃ³vel com aprendizado federado (**Federated Learning**) usando o framework [Flower (flwr)](https://flower.ai/). A rede Ã© modelada como uma grade hexagonal 5Ã—5 de estaÃ§Ãµes base, com um servidor central identificado pela maior *betweenness centrality* e clientes selecionados por distÃ¢ncia Dijkstra.
+Este projeto implementa um **Digital Twin** de uma rede móvel com aprendizado federado (**Federated Learning**) usando o framework [Flower (flwr)](https://flower.ai/). A rede é modelada como uma grade hexagonal 5×5 de estações base, com um servidor central identificado pela maior *betweenness centrality* e clientes selecionados por distância Dijkstra.
 
 ### Funcionalidades principais
 
-| Funcionalidade | DescriÃ§Ã£o |
+| Funcionalidade | Descrição |
 |---|---|
-| ðŸ—ºï¸ Mapa de rede interativo | VisualizaÃ§Ã£o da topologia hexagonal com thumbnails CIFAR-10 |
-| ðŸ¤ Treinamento FL (FedAvg) | Rounds federados com agregaÃ§Ã£o ponderada por amostras |
-| ðŸ“Š MÃ©tricas de convergÃªncia | GrÃ¡ficos de Loss e AcurÃ¡cia por round (val e treino) |
-| âš™ï¸ Config por JSON | ParÃ¢metros carregÃ¡veis de arquivo local ou URL |
-| âš¡ Alta-latÃªncia simulada | SeleÃ§Ã£o periÃ³dica de clientes distantes para testes |
-| ðŸŽ¯ DistribuiÃ§Ã£o nÃ£o-IID | PartiÃ§Ã£o CIFAR-10 com dominÃ¢ncia de classe por cliente |
+| 🗺️ Mapa de rede interativo | Visualização da topologia hexagonal com thumbnails CIFAR-10 |
+| 🤝 Treinamento FL (FedAvg) | Rounds federados com agregação ponderada por amostras |
+| 📊 Métricas de convergência | Gráficos de Loss e Acurácia por round (val e treino) |
+| ⚙️ Config por JSON | Parâmetros carregáveis de arquivo local ou URL |
+| ⚡ Alta-latência simulada | Seleção periódica de clientes distantes para testes |
+| 🎯 Distribuição não-IID | Partição CIFAR-10 com dominância de classe por cliente |
 
 ---
 
-## PrÃ©-requisitos
+## Pré-requisitos
 
 - **Python 3.10** ou superior
 - **pip** atualizado
 - **Git** instalado
 - Sistema Operacional: Windows, Linux ou macOS
-- (Opcional) GPU CUDA para treinamento mais rÃ¡pido
+- (Opcional) GPU CUDA para treinamento mais rápido
 
-> **AtenÃ§Ã£o:** O projeto instala as dependÃªncias automaticamente ao iniciar (`main.py`), mas vocÃª pode instalÃ¡-las manualmente com o `requirements.txt`.
+> **Atenção:** O projeto instala as dependências automaticamente ao iniciar (`main.py`), mas você pode instalá-las manualmente com o `requirements.txt`.
 
 ---
 
-## InstalaÃ§Ã£o
+## Instalação
 
-### 1. Clone o repositÃ³rio
+### 1. Clone o repositório
 
 ```bash
 git clone https://github.com/<seu-usuario>/<nome-do-repositorio>.git
@@ -78,7 +78,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Instale as dependÃªncias
+### 3. Instale as dependências
 
 ```bash
 pip install -r requirements.txt
@@ -97,18 +97,18 @@ pip install -r requirements.txt
 python main.py
 ```
 
-O programa irÃ¡:
-1. Instalar automaticamente quaisquer dependÃªncias faltantes.
+O programa irá:
+1. Instalar automaticamente quaisquer dependências faltantes.
 2. Construir a topologia hexagonal e calcular o servidor central (Dijkstra).
-3. Abrir a interface grÃ¡fica.
+3. Abrir a interface gráfica.
 
 ### Fluxo recomendado na interface
 
 ```
-1. [âš™ Carregar Config JSON]  â†’  Escolha um arquivo de config ou use os padrÃµes
-2. [Carregar CIFAR-10]        â†’  Baixa o dataset (~170 MB) e carrega thumbnails
-3. [Treinar FL (Dijkstra)]    â†’  Executa os rounds de treinamento federado
-4. [Ver MÃ©tricas FL]          â†’  Exibe e salva os grÃ¡ficos de convergÃªncia
+1. [⚙ Carregar Config JSON]  →  Escolha um arquivo de config ou use os padrões
+2. [Carregar CIFAR-10]        →  Baixa o dataset (~170 MB) e carrega thumbnails
+3. [Treinar FL (Dijkstra)]    →  Executa os rounds de treinamento federado
+4. [Ver Métricas FL]          →  Exibe e salva os gráficos de convergência
 ```
 
 ---
@@ -117,77 +117,77 @@ O programa irÃ¡:
 
 ```
 migration_fdl/
-â”‚
-â”œâ”€â”€ main.py                        â† Ponto de entrada: python main.py
-â”œâ”€â”€ manifest.json                  â† Metadados completos do projeto
-â”œâ”€â”€ requirements.txt               â† DependÃªncias pip
-â”‚
-â”œâ”€â”€ config/
-â”‚   â”œâ”€â”€ example_config.json        â† Exemplo de configuraÃ§Ã£o de experimento
-â”‚   â””â”€â”€ schema.json                â† Schema JSON para validaÃ§Ã£o
-â”‚
-â”œâ”€â”€ models/                        â—„ CAMADA MODEL (lÃ³gica de domÃ­nio)
-â”‚   â”œâ”€â”€ network/
-â”‚   â”‚   â”œâ”€â”€ network_switch.py      â† Entidade NetworkSwitch
-â”‚   â”‚   â”œâ”€â”€ base_station.py        â† Entidade BaseStation
-â”‚   â”‚   â”œâ”€â”€ edge_server.py         â† Entidade EdgeServer
-â”‚   â”‚   â”œâ”€â”€ user.py                â† Entidade User
-â”‚   â”‚   â”œâ”€â”€ topology.py            â† Grafo nx.Graph com cÃ¡lculo de delay
-â”‚   â”‚   â””â”€â”€ topology_builder.py    â† FÃ¡brica: grade hexagonal + Dijkstra
-â”‚   â””â”€â”€ federated/
-â”‚       â”œâ”€â”€ experiment_config.py   â† ConfiguraÃ§Ã£o carregÃ¡vel por JSON
-â”‚       â”œâ”€â”€ fl_history.py          â† HistÃ³rico de mÃ©tricas FL
-â”‚       â”œâ”€â”€ cifar_cnn.py           â† CNN PyTorch para CIFAR-10
-â”‚       â”œâ”€â”€ fl_client.py           â† Cliente Flower (NumPyClient)
-â”‚       â”œâ”€â”€ fl_aggregator.py       â† FedAvg e mÃ©dia ponderada
-â”‚       â””â”€â”€ dataset_manager.py     â† Download, partiÃ§Ã£o e thumbnails CIFAR-10
-â”‚
-â”œâ”€â”€ controllers/                   â—„ CAMADA CONTROLLER (orquestraÃ§Ã£o)
-â”‚   â”œâ”€â”€ app_controller.py          â† Orquestrador central da aplicaÃ§Ã£o
-â”‚   â”œâ”€â”€ fl_controller.py           â† Rounds FL em thread separada
-â”‚   â””â”€â”€ config_controller.py       â† Carga e validaÃ§Ã£o de JSON
-â”‚
-â”œâ”€â”€ views/                         â—„ CAMADA VIEW (interface Tkinter)
-â”‚   â”œâ”€â”€ main_window.py             â† Janela principal e layout
-â”‚   â”œâ”€â”€ control_bar.py             â† Barra de botÃµes superior
-â”‚   â”œâ”€â”€ network_map_view.py        â† Mapa matplotlib da rede
-â”‚   â”œâ”€â”€ rounds_panel.py            â† Lista e detalhes de rounds
-â”‚   â”œâ”€â”€ metrics_window.py          â† GrÃ¡ficos de convergÃªncia
-â”‚   â””â”€â”€ config_dialog.py           â† DiÃ¡logo de carregamento de JSON
-â”‚
-â””â”€â”€ utils/
-    â”œâ”€â”€ installer.py               â† Auto-instalaÃ§Ã£o de dependÃªncias
-    â”œâ”€â”€ power_model.py             â† Modelo de energia (placeholder)
-    â””â”€â”€ component_manager.py       â† ExportaÃ§Ã£o do cenÃ¡rio como JSON
+│
+├── main.py                        ← Ponto de entrada: python main.py
+├── manifest.json                  ← Metadados completos do projeto
+├── requirements.txt               ← Dependências pip
+│
+├── config/
+│   ├── example_config.json        ← Exemplo de configuração de experimento
+│   └── schema.json                ← Schema JSON para validação
+│
+├── models/                        ◄ CAMADA MODEL (lógica de domínio)
+│   ├── network/
+│   │   ├── network_switch.py      ← Entidade NetworkSwitch
+│   │   ├── base_station.py        ← Entidade BaseStation
+│   │   ├── edge_server.py         ← Entidade EdgeServer
+│   │   ├── user.py                ← Entidade User
+│   │   ├── topology.py            ← Grafo nx.Graph com cálculo de delay
+│   │   └── topology_builder.py    ← Fábrica: grade hexagonal + Dijkstra
+│   └── federated/
+│       ├── experiment_config.py   ← Configuração carregável por JSON
+│       ├── fl_history.py          ← Histórico de métricas FL
+│       ├── cifar_cnn.py           ← CNN PyTorch para CIFAR-10
+│       ├── fl_client.py           ← Cliente Flower (NumPyClient)
+│       ├── fl_aggregator.py       ← FedAvg e média ponderada
+│       └── dataset_manager.py     ← Download, partição e thumbnails CIFAR-10
+│
+├── controllers/                   ◄ CAMADA CONTROLLER (orquestração)
+│   ├── app_controller.py          ← Orquestrador central da aplicação
+│   ├── fl_controller.py           ← Rounds FL em thread separada
+│   └── config_controller.py       ← Carga e validação de JSON
+│
+├── views/                         ◄ CAMADA VIEW (interface Tkinter)
+│   ├── main_window.py             ← Janela principal e layout
+│   ├── control_bar.py             ← Barra de botões superior
+│   ├── network_map_view.py        ← Mapa matplotlib da rede
+│   ├── rounds_panel.py            ← Lista e detalhes de rounds
+│   ├── metrics_window.py          ← Gráficos de convergência
+│   └── config_dialog.py           ← Diálogo de carregamento de JSON
+│
+└── utils/
+    ├── installer.py               ← Auto-instalação de dependências
+    ├── power_model.py             ← Modelo de energia (placeholder)
+    └── component_manager.py       ← Exportação do cenário como JSON
 ```
 
 ---
 
-## Arquivos de ConfiguraÃ§Ã£o
+## Arquivos de Configuração
 
-O experimento Ã© controlado por um arquivo **JSON**. Use `config/example_config.json` como base.
+O experimento é controlado por um arquivo **JSON**. Use `config/example_config.json` como base.
 
-### Campos disponÃ­veis
+### Campos disponíveis
 
-| Campo | Tipo | PadrÃ£o | DescriÃ§Ã£o |
+| Campo | Tipo | Padrão | Descrição |
 |---|---|---|---|
-| `n_clients` | `int` | `5` | NÃºmero de clientes FL por round |
+| `n_clients` | `int` | `5` | Número de clientes FL por round |
 | `n_rounds` | `int` | `5` | Total de rounds federados |
-| `delay_mode` | `"random"` \| `"fixed"` | `"random"` | Modo de cÃ¡lculo de latÃªncias |
-| `fixed_weights` | `dict` | `{}` | LatÃªncias fixas por `bs_id` (sÃ³ no modo `fixed`) |
+| `weight_mode` | `"random"` \| `"fixed"` | `"random"` | Modo de cálculo de latências |
+| `fixed_weights` | `dict` | `{}` | Latências fixas por `bs_id` (só no modo `fixed`) |
 | `high_latency_periodicity` | `int` | `0` | A cada N rounds, inclui clientes HL (`0` = desativado) |
-| `high_latency_fraction` | `float` | `0.3` | FraÃ§Ã£o de clientes de alta latÃªncia |
+| `high_latency_fraction` | `float` | `0.3` | Fração de clientes de alta latência |
 | `seed` | `int` | `42` | Semente para reprodutibilidade |
-| `local_epochs` | `int` | `1` | Ã‰pocas de treino local por round |
+| `local_epochs` | `int` | `1` | Épocas de treino local por round |
 | `batch_size` | `int` | `32` | Tamanho do batch no DataLoader |
 
-### Exemplo de configuraÃ§Ã£o
+### Exemplo de configuração
 
 ```json
 {
   "n_clients": 5,
   "n_rounds": 6,
-  "delay_mode": "fixed",
+  "weight_mode": "fixed",
   "fixed_weights": {
     "1": 2.5,
     "2": 5.1,
@@ -207,69 +207,69 @@ O experimento Ã© controlado por um arquivo **JSON**. Use `config/example_confi
 
 ---
 
-## Interface GrÃ¡fica
+## Interface Gráfica
 
-| BotÃ£o | AÃ§Ã£o |
+| Botão | Ação |
 |---|---|
 | `Carregar CIFAR-10` | Baixa o dataset e carrega thumbnails no mapa |
 | `Treinar FL (Dijkstra)` | Executa os rounds federados em background |
-| `Ver MÃ©tricas FL` | Abre janela com 4 grÃ¡ficos + salva PNG em `fl_results_v15/` |
-| `âš™ Carregar Config JSON` | Abre diÃ¡logo para selecionar JSON (arquivo ou URL) |
+| `Ver Métricas FL` | Abre janela com 4 gráficos + salva PNG em `fl_results_v15/` |
+| `⚙ Carregar Config JSON` | Abre diálogo para selecionar JSON (arquivo ou URL) |
 
 ### Legenda do mapa
 
-| SÃ­mbolo | Significado |
+| Símbolo | Significado |
 |---|---|
-| â­ (amarelo) | Servidor central (maior betweenness centrality) |
-| ðŸ”µ Azul escuro | Cliente prÃ³ximo ao servidor |
-| ðŸŸ£ Roxo | Cliente distante do servidor |
-| â” Verde | Link rÃ¡pido (baixo custo delay/bandwidth) |
-| â” Laranja | Link mÃ©dio |
-| â” Vermelho | Link lento (alto custo) |
+| ⭐ (amarelo) | Servidor central (maior betweenness centrality) |
+| 🔵 Azul escuro | Cliente próximo ao servidor |
+| 🟣 Roxo | Cliente distante do servidor |
+| ━ Verde | Link rápido (baixo custo delay/bandwidth) |
+| ━ Laranja | Link médio |
+| ━ Vermelho | Link lento (alto custo) |
 
 ---
 
 ## Arquitetura MVC
 
 ```
-      â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”     callbacks     â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-      â”‚    VIEW      â”‚ â—„â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ â”‚   CONTROLLER     â”‚
-      â”‚  (Tkinter)   â”‚ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–º â”‚ (AppController   â”‚
-      â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜    eventos UI     â”‚  FLController    â”‚
-                                        â”‚  ConfigController)â”‚
-                                        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-                                                â”‚
-                                                â”‚ chama
-                                                Ã¢â€“Â¼
-                                        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-                                        â”‚      MODEL       â”‚
-                                        â”‚ (TopologyBuilder â”‚
-                                        â”‚  DatasetManager  â”‚
-                                        â”‚  CifarCNN        â”‚
-                                        â”‚  FedAvg / etc.)  â”‚
-                                        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+      ┌─────────────┐     callbacks     ┌──────────────────┐
+      │    VIEW      │ ◄──────────────── │   CONTROLLER     │
+      │  (Tkinter)   │ ───────────────► │ (AppController   │
+      └─────────────┘    eventos UI     │  FLController    │
+                                        │  ConfigController)│
+                                        └──────────────────┘
+                                                │
+                                                │ chama
+                                                â–¼
+                                        ┌──────────────────┐
+                                        │      MODEL       │
+                                        │ (TopologyBuilder │
+                                        │  DatasetManager  │
+                                        │  CifarCNN        │
+                                        │  FedAvg / etc.)  │
+                                        └──────────────────┘
 ```
 
-- **View** nÃ£o conhece os Models â€” recebe dados apenas via callbacks.
+- **View** não conhece os Models — recebe dados apenas via callbacks.
 - **Controller** orquestra, executa threads e notifica a View.
-- **Model** Ã© completamente independente de Tkinter (testÃ¡vel isoladamente).
+- **Model** é completamente independente de Tkinter (testável isoladamente).
 
 ---
 
-## ConfiguraÃ§Ã£o do GitHub
+## Configuração do GitHub
 
-### 1. Inicialize o repositÃ³rio localmente
+### 1. Inicialize o repositório localmente
 
 ```bash
 cd migration_fdl
 git init
 git add .
-git commit -m "feat: estrutura MVC inicial â€” Digital Twin FL CIFAR-10"
+git commit -m "feat: estrutura MVC inicial — Digital Twin FL CIFAR-10"
 ```
 
-### 2. Crie o repositÃ³rio no GitHub
+### 2. Crie o repositório no GitHub
 
-Acesse [github.com/new](https://github.com/new), defina o nome e crie o repositÃ³rio **sem** inicializar com README (jÃ¡ temos o nosso).
+Acesse [github.com/new](https://github.com/new), defina o nome e crie o repositório **sem** inicializar com README (já temos o nosso).
 
 ### 3. Conecte e envie
 
@@ -281,7 +281,7 @@ git push -u origin main
 
 ### 4. `.gitignore` recomendado
 
-Crie um arquivo `.gitignore` na raiz do projeto com o seguinte conteÃºdo:
+Crie um arquivo `.gitignore` na raiz do projeto com o seguinte conteúdo:
 
 ```gitignore
 # Ambiente virtual
@@ -307,7 +307,7 @@ datasets/
 .vscode/
 .idea/
 
-# Arquivos temporÃ¡rios do Windows
+# Arquivos temporários do Windows
 Thumbs.db
 desktop.ini
 tempCodeRunnerFile.py
@@ -317,17 +317,17 @@ logs/
 *.log
 ```
 
-> **Importante:** O dataset CIFAR-10 (~170 MB) Ã© baixado automaticamente pelo programa e **nÃ£o deve** ser commitado no repositÃ³rio.
+> **Importante:** O dataset CIFAR-10 (~170 MB) é baixado automaticamente pelo programa e **não deve** ser commitado no repositório.
 
-### 5. AtualizaÃ§Ãµes futuras
+### 5. Atualizações futuras
 
 ```bash
-# Verificar alteraÃ§Ãµes
+# Verificar alterações
 git status
 
-# Adicionar e commitar mudanÃ§as
+# Adicionar e commitar mudanças
 git add .
-git commit -m "feat: descriÃ§Ã£o da mudanÃ§a"
+git commit -m "feat: descrição da mudança"
 
 # Enviar para o GitHub
 git push
@@ -335,7 +335,7 @@ git push
 
 ### 6. Usando GitHub Raw para carregar configs
 
-ApÃ³s fazer push dos seus arquivos JSON de config, vocÃª pode carregÃ¡-los diretamente pela interface usando a URL Raw do GitHub:
+Após fazer push dos seus arquivos JSON de config, você pode carregá-los diretamente pela interface usando a URL Raw do GitHub:
 
 ```
 https://raw.githubusercontent.com/<usuario>/<repositorio>/main/config/example_config.json
@@ -345,32 +345,31 @@ https://raw.githubusercontent.com/<usuario>/<repositorio>/main/config/example_co
 
 ## Contribuindo
 
-1. FaÃ§a um **fork** do repositÃ³rio.
+1. Faça um **fork** do repositório.
 2. Crie uma branch para sua feature: `git checkout -b feat/minha-feature`
-3. FaÃ§a suas alteraÃ§Ãµes seguindo a arquitetura MVC.
-4. Commit com mensagens descritivas: `git commit -m "feat: adiciona novo modo de agregaÃ§Ã£o"`
+3. Faça suas alterações seguindo a arquitetura MVC.
+4. Commit com mensagens descritivas: `git commit -m "feat: adiciona novo modo de agregação"`
 5. Envie um **Pull Request**.
 
 ---
 
-## DependÃªncias
+## Dependências
 
-| Pacote | VersÃ£o mÃ­nima | Uso |
+| Pacote | Versão mínima | Uso |
 |---|---|---|
-| `matplotlib` | â‰¥ 3.7 | VisualizaÃ§Ã£o do mapa e grÃ¡ficos |
-| `numpy` | â‰¥ 1.24 | OperaÃ§Ãµes numÃ©ricas e pesos |
-| `networkx` | â‰¥ 3.1 | Topologia de rede e Dijkstra |
-| `torch` | â‰¥ 2.0 | Rede neural CifarCNN |
-| `torchvision` | â‰¥ 0.15 | Dataset CIFAR-10 |
-| `flwr` | â‰¥ 1.5 | Framework de Aprendizado Federado |
-| `Pillow` | â‰¥ 10.0 | ManipulaÃ§Ã£o de imagens |
+| `matplotlib` | ≥ 3.7 | Visualização do mapa e gráficos |
+| `numpy` | ≥ 1.24 | Operações numéricas e pesos |
+| `networkx` | ≥ 3.1 | Topologia de rede e Dijkstra |
+| `torch` | ≥ 2.0 | Rede neural CifarCNN |
+| `torchvision` | ≥ 0.15 | Dataset CIFAR-10 |
+| `flwr` | ≥ 1.5 | Framework de Aprendizado Federado |
+| `Pillow` | ≥ 10.0 | Manipulação de imagens |
 
 ---
 
-## LicenÃ§a
+## Licença
 
-Projeto acadÃªmico â€” Programa de PÃ³s-GraduaÃ§Ã£o em CiÃªncia da ComputaÃ§Ã£o.  
-Â© 2026 Rafael / Orientador: Dr. Paulo Silas Servero. Todos os direitos reservados.
-
+Projeto acadêmico — Programa de Pós-Graduação em Ciência da Computação.  
+© 2026 Rafael / Orientador: Dr. Paulo Silas Servero. Todos os direitos reservados.
 
 
