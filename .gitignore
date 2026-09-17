@@ -1,0 +1,6 @@
+data/cifar-10-python.tar.gz
+data_cifar10/
+fl_results_v15/
+datasets/
+__pycache__/
+*.py[cod]
