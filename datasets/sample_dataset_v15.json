@@ -1,0 +1,362 @@
+{
+  "base_stations": [
+    {
+      "id": 1,
+      "coordinates": [
+        0.0,
+        0.0
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 2,
+      "coordinates": [
+        1.0,
+        0.0
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 3,
+      "coordinates": [
+        2.0,
+        0.0
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 4,
+      "coordinates": [
+        3.0,
+        0.0
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 5,
+      "coordinates": [
+        4.0,
+        0.0
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 6,
+      "coordinates": [
+        0.5,
+        0.866025
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 7,
+      "coordinates": [
+        1.5,
+        0.866025
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 8,
+      "coordinates": [
+        2.5,
+        0.866025
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 9,
+      "coordinates": [
+        3.5,
+        0.866025
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 10,
+      "coordinates": [
+        4.5,
+        0.866025
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 11,
+      "coordinates": [
+        0.0,
+        1.73205
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 12,
+      "coordinates": [
+        1.0,
+        1.73205
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 13,
+      "coordinates": [
+        2.0,
+        1.73205
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 14,
+      "coordinates": [
+        3.0,
+        1.73205
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 15,
+      "coordinates": [
+        4.0,
+        1.73205
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 16,
+      "coordinates": [
+        0.5,
+        2.598075
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 17,
+      "coordinates": [
+        1.5,
+        2.598075
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 18,
+      "coordinates": [
+        2.5,
+        2.598075
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 19,
+      "coordinates": [
+        3.5,
+        2.598075
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 20,
+      "coordinates": [
+        4.5,
+        2.598075
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 21,
+      "coordinates": [
+        0.0,
+        3.4641
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 22,
+      "coordinates": [
+        1.0,
+        3.4641
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 23,
+      "coordinates": [
+        2.0,
+        3.4641
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 24,
+      "coordinates": [
+        3.0,
+        3.4641
+      ],
+      "wireless_delay": 0
+    },
+    {
+      "id": 25,
+      "coordinates": [
+        4.0,
+        3.4641
+      ],
+      "wireless_delay": 0
+    }
+  ],
+  "edge_servers": [
+    {
+      "id": 1,
+      "cpu": 16,
+      "memory": 64,
+      "base_station_id": 1
+    },
+    {
+      "id": 2,
+      "cpu": 16,
+      "memory": 64,
+      "base_station_id": 2
+    },
+    {
+      "id": 3,
+      "cpu": 32,
+      "memory": 64,
+      "base_station_id": 3
+    },
+    {
+      "id": 4,
+      "cpu": 24,
+      "memory": 64,
+      "base_station_id": 4
+    },
+    {
+      "id": 5,
+      "cpu": 24,
+      "memory": 64,
+      "base_station_id": 5
+    },
+    {
+      "id": 6,
+      "cpu": 24,
+      "memory": 64,
+      "base_station_id": 6
+    },
+    {
+      "id": 7,
+      "cpu": 16,
+      "memory": 64,
+      "base_station_id": 7
+    },
+    {
+      "id": 8,
+      "cpu": 16,
+      "memory": 64,
+      "base_station_id": 8
+    },
+    {
+      "id": 9,
+      "cpu": 48,
+      "memory": 64,
+      "base_station_id": 9
+    },
+    {
+      "id": 10,
+      "cpu": 16,
+      "memory": 64,
+      "base_station_id": 10
+    },
+    {
+      "id": 11,
+      "cpu": 16,
+      "memory": 64,
+      "base_station_id": 11
+    },
+    {
+      "id": 12,
+      "cpu": 16,
+      "memory": 64,
+      "base_station_id": 12
+    },
+    {
+      "id": 13,
+      "cpu": 24,
+      "memory": 64,
+      "base_station_id": 13
+    },
+    {
+      "id": 14,
+      "cpu": 24,
+      "memory": 64,
+      "base_station_id": 14
+    },
+    {
+      "id": 15,
+      "cpu": 16,
+      "memory": 64,
+      "base_station_id": 15
+    },
+    {
+      "id": 16,
+      "cpu": 24,
+      "memory": 64,
+      "base_station_id": 16
+    },
+    {
+      "id": 17,
+      "cpu": 48,
+      "memory": 64,
+      "base_station_id": 17
+    },
+    {
+      "id": 18,
+      "cpu": 24,
+      "memory": 64,
+      "base_station_id": 18
+    },
+    {
+      "id": 19,
+      "cpu": 48,
+      "memory": 64,
+      "base_station_id": 19
+    },
+    {
+      "id": 20,
+      "cpu": 32,
+      "memory": 64,
+      "base_station_id": 20
+    },
+    {
+      "id": 21,
+      "cpu": 16,
+      "memory": 64,
+      "base_station_id": 21
+    },
+    {
+      "id": 22,
+      "cpu": 24,
+      "memory": 64,
+      "base_station_id": 22
+    },
+    {
+      "id": 23,
+      "cpu": 48,
+      "memory": 64,
+      "base_station_id": 23
+    },
+    {
+      "id": 24,
+      "cpu": 32,
+      "memory": 64,
+      "base_station_id": 24
+    },
+    {
+      "id": 25,
+      "cpu": 32,
+      "memory": 64,
+      "base_station_id": 25
+    },
+    {
+      "id": 26,
+      "cpu": 64,
+      "memory": 256,
+      "base_station_id": 13
+    }
+  ]
+}
