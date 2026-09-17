@@ -7,7 +7,7 @@
 
 **Autores:** Rafael de Souza Teixeira (Mestrando) / Orientador: Dr. Paulo Silas Servero<br>
 **Versão:** 3.0.0 · **Linguagem:** Python 3.10+<br>
-**Repositório:** [Rafadsteixeira/SimulatorFederatedLearning](https://github.com/Rafadsteixeira/SimulatorFederatedLearning)
+**Repositório:** [Rafadsteixeira/SimulatorFederatedLearning](https://github.com/Rafadsteixeira/SimulatorFederatedLearning)<br><br>
 **Research Questions** - Sob quais condições a inclusão de clientes lentos, porém com dados informativos, compensa o custo adicional de latência no processo de treinamento distribuído em dispositivos móveis?
 ---
 
