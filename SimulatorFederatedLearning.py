@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-SimulatorFederatedLearning — Topologia Edge Computing hexagonal com aprendizado federado via Flower nativo.
+SimulatorFederatedLearning — Digital Twin FL com CIFAR-10
+Topologia Edge Computing hexagonal com aprendizado federado via Flower nativo.
 
 Arquitetura Flower:
   - ClientApp  → encapsula CifarFederatedClient (NumPyClient)
@@ -9,41 +10,10 @@ Arquitetura Flower:
     coleta de métricas e atualização da GUI
 """
 
-import subprocess
 import sys
 
-import importlib.util
-
-# The Windows console may default to a legacy code page (for example,
-# cp1252), which cannot encode some training/logging messages.
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-_pkg_map = {
-    "matplotlib": "matplotlib",
-    "numpy": "numpy",
-    "networkx": "networkx",
-    "torch": "torch",
-    "torchvision": "torchvision",
-    "flwr": "flwr[simulation]>=1.6",
-    "PIL": "Pillow",
-}
-for _mod, _pip_name in _pkg_map.items():
-    if importlib.util.find_spec(_mod) is None:
-        try:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", _pip_name],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-        except Exception:
-            print(f"Aviso: falha ao instalar {_pip_name}, tentando continuar...")
-
 import networkx as nx
-import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import numpy as np
@@ -53,19 +23,19 @@ import json
 import threading
 import urllib.request
 import tempfile
+from pathlib import Path
+from uuid import uuid4
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional, Union, Any
+from dataclasses import asdict, dataclass, field
+from typing import List, Dict, Tuple, Optional, Any
 from collections import OrderedDict
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
-import torchvision
 import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10
 
@@ -76,8 +46,8 @@ from flwr.server import ServerApp, ServerConfig
 from flwr.server.strategy import FedAvg as FlowerFedAvg
 from flwr.server.client_proxy import ClientProxy
 from flwr.common import (
-    NDArrays, Parameters, Scalar,
-    FitIns, FitRes, EvaluateIns, EvaluateRes,
+    NDArrays, Parameters,
+    FitIns, FitRes,
     ndarrays_to_parameters, parameters_to_ndarrays,
 )
 try:
@@ -91,7 +61,23 @@ try:
 except ImportError:
     _HAS_RUN_SIMULATION = False
     print("Aviso: flwr.simulation.run_simulation nao disponivel. "
-          "Atualize: pip install 'flwr>=1.6'")
+          "Sincronize o ambiente com: python -m uv sync")
+
+from agno_policy import AgnoRoundPolicy
+from experiment_core import (
+    choose_client_ids,
+    choose_round_deadline,
+    compute_staleness,
+    deadline_status,
+    estimate_virtual_duration,
+    effective_sample_weight,
+    jensen_shannon_divergence,
+    label_distribution_metrics,
+    partition_indices,
+    update_alignment,
+    weighted_average_updates,
+)
+from run_artifacts import RunArtifactRecorder
 
 
 # ==============================================================================
@@ -118,17 +104,26 @@ class ExperimentConfig:
     enable_staleness:         bool  = True          # aplicar amortecimento de staleness na agregacao
     staleness_gamma:          float = 0.5           # expoente de penalizacao: 1 / (1 + tau)^gamma
     drop_stragglers:          bool  = False         # Compatibilidade: equivale a late_update_policy='discard'
-    late_update_policy:       str   = "reduced_weight"  # 'discard', 'defer' ou 'reduced_weight'
+    late_update_policy:       str   = "reduced_weight"  # discard, defer ou reduced_weight
+    late_update_weight_factor: float = 0.5
     max_staleness:            int   = 2
 
-    # Selecao pre-round: baseline por latencia ou combinacao de utilidade e custo.
-    selection_mode:           str   = "multi_objective"  # 'latency' ou 'multi_objective'
+    # Baselines de selecao e score multiobjetivo fixo.
+    selection_mode:           str   = "multi_objective"
     selection_info_weight:    float = 0.45
     selection_rare_weight:    float = 0.25
     selection_diversity_weight: float = 0.15
     selection_time_weight:    float = 0.15
     rare_class_threshold:     float = 0.08
     time_jitter_fraction:     float = 0.0
+
+    # Politica opcional baseada em LLM/Agno.
+    # Em shadow o agente decide e audita, mas o baseline continua sendo aplicado.
+    agent_policy_mode:        str   = "shadow"  # baseline, shadow, active ou replay
+    agent_model_id:           str   = "openai/gpt-oss-120b"
+    agent_timeout_s:          float = 20.0
+    agent_audit_file:         str   = "decisions.jsonl"
+    agent_replay_file:        str   = ""
 
     @classmethod
     def from_json(cls, path: str) -> "ExperimentConfig":
@@ -156,6 +151,7 @@ class ExperimentConfig:
         cfg.drop_stragglers          = bool(data.get('drop_stragglers',         cfg.drop_stragglers))
         legacy_policy = "discard" if cfg.drop_stragglers else cfg.late_update_policy
         cfg.late_update_policy       = str(data.get('late_update_policy', legacy_policy))
+        cfg.late_update_weight_factor = float(data.get('late_update_weight_factor', cfg.late_update_weight_factor))
         cfg.max_staleness            = int(data.get('max_staleness', cfg.max_staleness))
         cfg.selection_mode           = str(data.get('selection_mode', cfg.selection_mode))
         cfg.selection_info_weight    = float(data.get('selection_info_weight', cfg.selection_info_weight))
@@ -164,15 +160,68 @@ class ExperimentConfig:
         cfg.selection_time_weight    = float(data.get('selection_time_weight', cfg.selection_time_weight))
         cfg.rare_class_threshold     = float(data.get('rare_class_threshold', cfg.rare_class_threshold))
         cfg.time_jitter_fraction     = float(data.get('time_jitter_fraction', cfg.time_jitter_fraction))
+        cfg.agent_policy_mode        = str(data.get('agent_policy_mode', cfg.agent_policy_mode))
+        cfg.agent_model_id           = str(data.get('agent_model_id', cfg.agent_model_id))
+        cfg.agent_timeout_s          = float(data.get('agent_timeout_s', cfg.agent_timeout_s))
+        cfg.agent_audit_file         = str(data.get('agent_audit_file', cfg.agent_audit_file))
+        cfg.agent_replay_file        = str(data.get('agent_replay_file', cfg.agent_replay_file))
+
+        if cfg.n_clients < 1 or cfg.n_rounds < 1:
+            raise ValueError("n_clients e n_rounds devem ser maiores que zero")
+        if cfg.local_epochs < 1 or cfg.batch_size < 1:
+            raise ValueError("local_epochs e batch_size devem ser maiores que zero")
+        if cfg.seed < 0:
+            raise ValueError("seed deve ser nao negativa")
+        if cfg.high_latency_periodicity < 0:
+            raise ValueError("high_latency_periodicity deve ser nao negativa")
+        if not np.isfinite(cfg.high_latency_fraction) or not 0 <= cfg.high_latency_fraction <= 1:
+            raise ValueError("high_latency_fraction deve estar entre 0 e 1")
 
         if cfg.weight_mode not in ("random", "fixed"):
             raise ValueError(f"weight_mode deve ser 'random' ou 'fixed', recebido: {cfg.weight_mode!r}")
         if cfg.deadline_mode not in ("fixed", "percentile"):
             raise ValueError("deadline_mode deve ser 'fixed' ou 'percentile'")
+        if not np.isfinite(cfg.round_deadline) or cfg.round_deadline <= 0:
+            raise ValueError("round_deadline deve ser maior que zero")
+        if not np.isfinite(cfg.deadline_percentile) or not 0 <= cfg.deadline_percentile <= 100:
+            raise ValueError("deadline_percentile deve estar entre 0 e 100")
+        if not np.isfinite(cfg.comp_time_per_sample) or cfg.comp_time_per_sample < 0:
+            raise ValueError("comp_time_per_sample deve ser finito e nao negativo")
+        if not np.isfinite(cfg.staleness_gamma) or cfg.staleness_gamma < 0:
+            raise ValueError("staleness_gamma deve ser finito e nao negativo")
+        if cfg.max_staleness < 0:
+            raise ValueError("max_staleness deve ser nao negativo")
         if cfg.late_update_policy not in ("discard", "defer", "reduced_weight"):
             raise ValueError("late_update_policy deve ser 'discard', 'defer' ou 'reduced_weight'")
-        if cfg.selection_mode not in ("latency", "multi_objective"):
-            raise ValueError("selection_mode deve ser 'latency' ou 'multi_objective'")
+        if not np.isfinite(cfg.late_update_weight_factor) or not 0 < cfg.late_update_weight_factor <= 1:
+            raise ValueError("late_update_weight_factor deve estar no intervalo (0, 1]")
+        if cfg.selection_mode not in ("random", "fastest", "dijkstra", "latency", "multi_objective"):
+            raise ValueError("selection_mode deve ser random, fastest, dijkstra ou multi_objective")
+        if not np.isfinite(cfg.rare_class_threshold) or not 0 <= cfg.rare_class_threshold <= 1:
+            raise ValueError("rare_class_threshold deve estar entre 0 e 1")
+        if not np.isfinite(cfg.time_jitter_fraction) or not 0 <= cfg.time_jitter_fraction <= 1:
+            raise ValueError("time_jitter_fraction deve estar entre 0 e 1")
+        selection_weights = (
+            cfg.selection_info_weight,
+            cfg.selection_rare_weight,
+            cfg.selection_diversity_weight,
+            cfg.selection_time_weight,
+        )
+        if (not all(np.isfinite(weight) and weight >= 0 for weight in selection_weights)
+                or sum(selection_weights) <= 0):
+            raise ValueError("pesos de selecao devem ser nao negativos e ter soma positiva")
+        if cfg.agent_policy_mode not in ("baseline", "shadow", "active", "replay"):
+            raise ValueError(
+                "agent_policy_mode deve ser baseline, shadow, active ou replay"
+            )
+        if not cfg.agent_model_id.strip():
+            raise ValueError("agent_model_id nao pode ser vazio")
+        if not np.isfinite(cfg.agent_timeout_s) or cfg.agent_timeout_s <= 0:
+            raise ValueError("agent_timeout_s deve ser maior que zero")
+        if not cfg.agent_audit_file.strip():
+            raise ValueError("agent_audit_file nao pode ser vazio")
+        if cfg.agent_policy_mode == "replay" and not cfg.agent_replay_file.strip():
+            raise ValueError("agent_replay_file e obrigatorio no modo replay")
         return cfg
 
     def to_summary_lines(self) -> List[str]:
@@ -190,6 +239,14 @@ class ExperimentConfig:
             lines.append(f"Fracao    : {int(self.high_latency_fraction * 100)}%")
         else:
             lines.append("Alta-lat. : desativada")
+        lines.append(f"Agno      : {self.agent_policy_mode.upper()}")
+        lines.append(f"Selecao   : {self.selection_mode}")
+        lines.append(
+            f"Atrasos   : {self.late_update_policy} "
+            f"(fator={self.late_update_weight_factor:.2f}, max tau={self.max_staleness})"
+        )
+        if self.agent_policy_mode != "baseline":
+            lines.append(f"LLM       : {self.agent_model_id}")
         lines.append(f"Seed      : {self.seed}")
         lines.append(f"Epocas loc: {self.local_epochs}")
         lines.append(f"Batch     : {self.batch_size}")
@@ -272,7 +329,6 @@ class EdgeServer:
         self.cpu = cpu
         self.memory = memory
         self.base_station = None
-        self.power_model = None
         EdgeServer._all.append(self)
 
     @classmethod
@@ -342,10 +398,6 @@ class Topology(nx.Graph):
         return delay
 
 
-class LinearServerPowerModel:
-    pass
-
-
 class ScenarioExporter:
     """Exporta topologia de rede para arquivo JSON."""
 
@@ -368,7 +420,7 @@ class ScenarioExporter:
             ],
         }
         path = os.path.join(_ds_dir, f"{file_name}.json")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w") as f:
             json.dump(data, f, indent=2)
         print(f"  Dataset exportado -> {path}")
 
@@ -424,9 +476,6 @@ def generate_random_links(num_links):
 #  INICIALIZACAO DA TOPOLOGIA
 # ==============================================================================
 
-if os.path.exists("tempCodeRunnerFile.py"):
-    os.remove("tempCodeRunnerFile.py")
-
 random.seed(42)
 
 map_coordinates = hexagonal_grid(x_size=5, y_size=5)
@@ -439,7 +488,6 @@ for coords in map_coordinates:
     bs._connect_to_network_switch(sw)
     # Servidor de borda com capacidade heterogenea por estacao base
     es = EdgeServer(cpu=random.choice([16, 24, 32, 48]), memory=64)
-    es.power_model = LinearServerPowerModel
     bs._connect_to_edge_server(es)
 
 partially_connected_hexagonal_mesh(
@@ -452,7 +500,6 @@ betweenness = nx.betweenness_centrality(topology_ref, weight='delay')
 central_switch = max(betweenness, key=betweenness.get)
 
 central_server = EdgeServer(cpu=64, memory=256)
-central_server.power_model = LinearServerPowerModel
 central_switch.base_station.edge_servers = [central_server]
 central_server.base_station = central_switch.base_station
 
@@ -523,7 +570,7 @@ def get_path_network_metrics(base_station: BaseStation) -> Tuple[float, float, L
     return total_delay_ms, bottleneck_bw, path
 
 
-def get_model_size_mb(model: nn.Module) -> float:
+def get_model_size_megabits(model: nn.Module) -> float:
     """Tamanho do modelo em Megabits (Mb) com parametros float32 (32 bits)."""
     total_params = sum(p.numel() for p in model.parameters())
     return float((total_params * 32) / 1e6)
@@ -550,7 +597,7 @@ def compute_client_timing(
     cid: int,
     n_samples: int,
     epochs: int,
-    model_size_mb: float,
+    model_size_megabits: float,
     cfg: ExperimentConfig,
     round_deadline: float,
     round_start_time: float = 0.0,
@@ -562,29 +609,32 @@ def compute_client_timing(
     upload e o momento de chegada para o cliente na rodada.
     """
     latency_ms, bottleneck_bw, _ = get_path_network_metrics(client_station)
-    latency_sec = latency_ms / 1000.0
-
-    # 1. Download do modelo global (servidor -> cliente)
-    t_down = (model_size_mb / max(bottleneck_bw, 0.1)) + latency_sec
-
-    # 2. Treinamento local no no de borda (depende de amostras, epocas e CPU)
+    # CPU e variacao sao dados do perfil; o tempo permanece uma estimativa virtual.
     cpu_cores = 32
     if client_station.edge_servers:
         cpu_cores = client_station.edge_servers[0].cpu
     profile_factor = client_profile.compute_factor if client_profile else 1.0
-    cpu_speed_factor = max((cpu_cores / 32.0) * profile_factor, 0.2)
-    t_comp = (n_samples * epochs * cfg.comp_time_per_sample) / cpu_speed_factor
-
-    # 3. Upload dos novos pesos (cliente -> servidor)
-    t_up = (model_size_mb / max(bottleneck_bw, 0.1)) + latency_sec
-
-    # 4. Duracao total e momento de chegada
-    t_total      = t_down + t_comp + t_up
-    if client_profile:
-        t_total *= max(0.05, 1.0 + client_profile.time_jitter)
+    duration = estimate_virtual_duration(
+        model_size_megabits=model_size_megabits,
+        n_samples=n_samples,
+        epochs=epochs,
+        comp_time_per_sample=cfg.comp_time_per_sample,
+        bandwidth_mbps=bottleneck_bw,
+        latency_ms=latency_ms,
+        cpu_cores=cpu_cores,
+        compute_factor=profile_factor,
+        jitter_fraction=client_profile.time_jitter if client_profile else 0.0,
+    )
+    t_down = duration["download_s"]
+    t_comp = duration["compute_s"]
+    t_up = duration["upload_s"]
+    t_total = duration["total_s"]
     arrival_time = round_start_time + t_total
 
-    on_time = (t_total <= round_deadline) if round_deadline > 0 else True
+    on_time = (
+        deadline_status(arrival_time, round_start_time + round_deadline)[0]
+        if round_deadline > 0 else True
+    )
     staleness = accumulated_staleness if on_time else (accumulated_staleness + 1)
 
     return ClientTimingResult(
@@ -630,18 +680,10 @@ class PendingUpdate:
     payload: Any
     n_samples: int
     metrics: Dict
-
-
-def _js_divergence(p: np.ndarray, q: np.ndarray) -> float:
-    """Jensen-Shannon em nats, definida tambem para distribuicoes esparsas."""
-    p = np.asarray(p, dtype=float)
-    q = np.asarray(q, dtype=float)
-    p = p / max(float(p.sum()), 1e-12)
-    q = q / max(float(q.sum()), 1e-12)
-    m = 0.5 * (p + q)
-    mask_p, mask_q = p > 0, q > 0
-    return float(0.5 * np.sum(p[mask_p] * np.log(p[mask_p] / m[mask_p]))
-                 + 0.5 * np.sum(q[mask_q] * np.log(q[mask_q] / m[mask_q])))
+    invited_round: int = 0
+    round_start_time: float = 0.0
+    round_deadline: float = 0.0
+    t_total: float = 0.0
 
 
 def build_client_profiles(partitions: List[Subset], cfg: ExperimentConfig) -> Dict[int, ClientProfile]:
@@ -651,19 +693,18 @@ def build_client_profiles(partitions: List[Subset], cfg: ExperimentConfig) -> Di
         targets = getattr(subset.dataset, "targets", [])
         labels = [int(targets[i]) for i in subset.indices]
         all_counts.append(np.bincount(labels, minlength=NUM_CLASSES).astype(float))
-    aggregate = np.sum(all_counts, axis=0) if all_counts else np.ones(NUM_CLASSES)
-    aggregate_dist = aggregate / max(float(aggregate.sum()), 1.0)
-    rare_classes = set(np.where(aggregate_dist <= cfg.rare_class_threshold)[0].tolist())
+    train_targets = getattr(_cifar_trainset, "targets", [])
+    aggregate = np.bincount(train_targets, minlength=NUM_CLASSES).astype(float)
     profiles: Dict[int, ClientProfile] = {}
     for cid, counts in enumerate(all_counts):
-        dist = counts / max(float(counts.sum()), 1.0)
-        entropy = float(-np.sum(dist[dist > 0] * np.log2(dist[dist > 0])))
-        rare_coverage = (sum(1 for c in rare_classes if counts[c] > 0) / len(rare_classes)
-                         if rare_classes else 0.0)
+        metrics = label_distribution_metrics(
+            counts, aggregate, cfg.rare_class_threshold
+        )
         rng = random.Random(cfg.seed + cid * 1009)
         profiles[cid] = ClientProfile(
-            cid=cid, label_counts=counts.astype(int).tolist(), entropy=entropy,
-            rare_coverage=float(rare_coverage), js_divergence=_js_divergence(dist, aggregate_dist),
+            cid=cid, label_counts=counts.astype(int).tolist(),
+            entropy=metrics["entropy"], rare_coverage=metrics["rare_coverage"],
+            js_divergence=metrics["js_divergence"],
             compute_factor=rng.uniform(0.7, 1.3),
             time_jitter=rng.uniform(-cfg.time_jitter_fraction, cfg.time_jitter_fraction),
         )
@@ -709,12 +750,14 @@ TRANSFORM_VIS = transforms.ToTensor()
 _cifar_trainset    = None
 _cifar_testset     = None
 _cifar_raw_dataset = None
+_central_testloader: Optional[DataLoader] = None
 _images_loaded     = False
 _client_sample_images: Dict[int, Tuple[np.ndarray, str, int]] = {}
 
 
 def load_cifar10():
     global _cifar_trainset, _cifar_testset, _cifar_raw_dataset
+    global _central_testloader
     print("  [CIFAR-10] Carregando dataset...")
     batches_dir = os.path.join(DATA_DIR, "cifar-10-batches-py")
     already_extracted = os.path.exists(batches_dir) and os.path.exists(os.path.join(batches_dir, "data_batch_1"))
@@ -733,36 +776,21 @@ def load_cifar10():
 
     _cifar_raw_dataset = CIFAR10(root=DATA_DIR, train=True, download=False,
                                  transform=TRANSFORM_VIS)
+    _central_testloader = DataLoader(
+        _cifar_testset, batch_size=128, shuffle=False, num_workers=0
+    )
     print(f"  [CIFAR-10] {len(_cifar_trainset)} treino | {len(_cifar_testset)} teste")
 
 
-def partition_cifar10(n_clients: int) -> List[Subset]:
-    class_indices = {c: [] for c in range(NUM_CLASSES)}
-    for idx, (_, label) in enumerate(_cifar_trainset):
-        class_indices[label].append(idx)
-
-    N_DOM = 120
-    N_MIN = 30
-    client_subsets = []
-
-    for cid in range(n_clients):
-        dom_a = cid % NUM_CLASSES
-        dom_b = (cid + 1) % NUM_CLASSES
-        indices = []
-
-        for c in [dom_a, dom_b]:
-            n = min(N_DOM, len(class_indices[c]))
-            indices.extend(random.sample(class_indices[c], n))
-
-        for c in range(NUM_CLASSES):
-            if c not in [dom_a, dom_b]:
-                n = min(N_MIN, len(class_indices[c]))
-                indices.extend(random.sample(class_indices[c], n))
-
-        random.shuffle(indices)
-        client_subsets.append(Subset(_cifar_trainset, indices))
-
-    return client_subsets
+def partition_cifar10(n_clients: int, seed: int = 42) -> List[Subset]:
+    """Partition CIFAR-10 without overlap, preserving a controllable label skew."""
+    if _cifar_trainset is None:
+        raise RuntimeError("CIFAR-10 de treino ainda nao foi carregado")
+    labels = getattr(_cifar_trainset, "targets", None)
+    if labels is None:
+        raise RuntimeError("O dataset CIFAR-10 nao disponibilizou seus rotulos")
+    indices_by_client = partition_indices(labels, n_clients, seed, dirichlet_alpha=0.4)
+    return [Subset(_cifar_trainset, indices) for indices in indices_by_client]
 
 
 def load_sample_images_for_map():
@@ -876,6 +904,15 @@ def eval_image_local(model: nn.Module,
     return total_loss / max(total_n, 1), total_corr / max(total_n, 1)
 
 
+def evaluate_global_weights(weights: NDArrays) -> Tuple[float, float]:
+    """Avalia uma vez o modelo global no conjunto de teste centralizado."""
+    if _central_testloader is None:
+        raise RuntimeError("Dataset de teste centralizado ainda nao foi carregado")
+    evaluation_model = CifarCNN()
+    set_weights(evaluation_model, weights)
+    return eval_image_local(evaluation_model, _central_testloader)
+
+
 # ==============================================================================
 #  CLIENTE FEDERADO — Flower NumPyClient
 # ==============================================================================
@@ -887,15 +924,17 @@ class CifarFederatedClient(NumPyClient):
     """
 
     def __init__(self, cid: int, base_station: BaseStation,
-                 partition: Subset, testset):
+                 partition: Subset, batch_size: int, label_entropy: float,
+                 seed: int = 42):
         self.cid          = cid
         self.base_station = base_station
+        self.seed         = seed
+        self.label_entropy = float(label_entropy)
         self.model        = CifarCNN()
+        self._loader_generator = torch.Generator().manual_seed(seed)
         self.trainloader  = DataLoader(
-            partition, batch_size=32, shuffle=True, num_workers=0
-        )
-        self.testloader   = DataLoader(
-            testset, batch_size=64, shuffle=False, num_workers=0
+            partition, batch_size=batch_size, shuffle=True, num_workers=0,
+            generator=self._loader_generator,
         )
         self.n_train = len(partition)
 
@@ -905,20 +944,15 @@ class CifarFederatedClient(NumPyClient):
     def _set_parameters(self, parameters: NDArrays):
         set_weights(self.model, parameters)
 
-    def _compute_label_entropy(self) -> float:
-        try:
-            subset = self.trainloader.dataset
-            targets = getattr(subset.dataset, 'targets', None)
-            if targets is None:
-                return 0.0
-            labels = [targets[idx] for idx in subset.indices]
-            counts = np.bincount(labels, minlength=NUM_CLASSES)
-            probs  = counts[counts > 0] / len(labels)
-            return float(-np.sum(probs * np.log2(probs)))
-        except Exception:
-            return 0.0
-
     def fit(self, parameters: NDArrays, config) -> Tuple[NDArrays, int, Dict]:
+        round_num = int(config.get("server_round", 1)) if isinstance(config, dict) else 1
+        round_seed = self.seed + round_num
+        random.seed(round_seed)
+        np.random.seed(round_seed)
+        torch.manual_seed(round_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(round_seed)
+        self._loader_generator.manual_seed(round_seed)
         initial_weights = [np.copy(w) for w in parameters]
         self._set_parameters(parameters)
         dist   = dijkstra_distances.get(self.base_station.network_switch, 0.0)
@@ -930,26 +964,14 @@ class CifarFederatedClient(NumPyClient):
         diff_sq = sum(np.sum((w_new - w_old) ** 2)
                       for w_new, w_old in zip(new_weights, initial_weights))
         update_norm = float(np.sqrt(diff_sq))
-        entropy     = self._compute_label_entropy()
-
         print(f"    [C{self.cid:02d} | BS{self.base_station.id} | dist={dist:.1f}ms] "
               f"loss={loss:.4f}  acc={acc*100:.1f}%  ||Δw||={update_norm:.3f}")
         return new_weights, self.n_train, {
             "train_loss":  float(loss),
             "train_acc":   float(acc),
             "update_norm": float(update_norm),
-            "entropy":     float(entropy),
+            "entropy":     self.label_entropy,
         }
-
-    def evaluate(self, parameters: NDArrays,
-                 config) -> Tuple[float, int, Dict]:
-        self._set_parameters(parameters)
-        loss, acc = eval_image_local(self.model, self.testloader)
-        return float(loss), len(self.testloader.dataset), {
-            "accuracy": float(acc),
-            "val_loss": float(loss),
-        }
-
 
 # ==============================================================================
 #  HISTORICO FL
@@ -985,17 +1007,6 @@ class FLHistory:
 #  AUXILIARES DE REDE / SELECAO
 # ==============================================================================
 
-def _weighted_average_metrics(metrics: List[Tuple[int, Dict]]) -> Dict:
-    """Media ponderada de metricas — usada como aggregation_fn pela Strategy."""
-    total = sum(n for n, _ in metrics)
-    if total == 0 or not metrics:
-        return {}
-    result = {}
-    for key in metrics[0][1].keys():
-        result[key] = sum(m[key] * n for n, m in metrics) / total
-    return result
-
-
 def _build_round_dijkstra(cfg: ExperimentConfig) -> Dict:
     if cfg.weight_mode == "random":
         for u, v in topology_ref.edges():
@@ -1029,7 +1040,9 @@ def _selection_score(cid: int, selected: List[int], estimated_times: Dict[int, f
     low, high = min(values, default=0.0), max(values, default=0.0)
     time_cost = ((estimated_times[cid] - low) / (high - low)) if high > low else 0.0
     diversity = 1.0 if not selected else min(
-        _js_divergence(_profile_distribution(profile), _profile_distribution(profiles[other]))
+        jensen_shannon_divergence(
+            _profile_distribution(profile), _profile_distribution(profiles[other])
+        )
         / max(np.log(2.0), 1e-12) for other in selected)
     return (cfg.selection_info_weight * profile.information_score
             + cfg.selection_rare_weight * profile.rare_coverage
@@ -1037,37 +1050,224 @@ def _selection_score(cid: int, selected: List[int], estimated_times: Dict[int, f
             - cfg.selection_time_weight * time_cost)
 
 
+def _client_history_for_agent(cid: int) -> Dict[str, Any]:
+    """Resume somente observacoes anteriores, sem enviar pesos ou dados brutos."""
+    observed: List[Dict[str, Any]] = []
+    for round_entry in fl_round_log:
+        for detail in round_entry.get("clients_detail", []):
+            if (int(detail.get("cid", -1)) == cid
+                    and detail.get("status") in {
+                        "on_time", "accepted_stale", "accepted_reduced",
+                        "discarded_deadline", "discarded_staleness", "failed",
+                    }):
+                observed.append(detail)
+
+    selection_state = _agent_selection_history.get(cid, {})
+    accepted_states = {"on_time", "accepted_stale", "accepted_reduced"}
+    accepted_count = sum(1 for detail in observed if detail.get("status") in accepted_states)
+    late_count = sum(
+        1 for detail in observed
+        if detail.get("status") not in {"on_time", "failed"}
+    )
+    return {
+        "times_selected": int(selection_state.get("times_selected", 0)),
+        "last_selected_round": selection_state.get("last_selected_round"),
+        "observed_updates": len(observed),
+        "accepted_updates": accepted_count,
+        "deadline_miss_rate": round(late_count / len(observed), 4) if observed else 0.0,
+        "mean_staleness": round(float(np.mean([
+            float(detail.get("staleness", 0.0)) for detail in observed
+        ])), 4) if observed else 0.0,
+        "mean_update_norm": round(float(np.mean([
+            float(detail.get("update_norm", 0.0)) for detail in observed
+        ])), 6) if observed else 0.0,
+        "mean_alignment_with_aggregate": round(float(np.mean([
+            float(detail.get("alignment_with_aggregate", 0.0)) for detail in observed
+            if detail.get("alignment_with_aggregate") is not None
+        ])), 6) if any(
+            detail.get("alignment_with_aggregate") is not None for detail in observed
+        ) else 0.0,
+    }
+
+
 def _select_clients_for_round(
         round_num: int, cfg: ExperimentConfig, all_stations: List[BaseStation],
-        round_dijkstra: Dict, round_start_time: float = 0.0) -> Tuple[List[BaseStation], bool]:
-    """Decide convites antes do round por latencia (baseline) ou utilidade prevista."""
-    n_clients = min(cfg.n_clients, len(all_stations))
-    sorted_asc = sorted(all_stations, key=lambda bs: round_dijkstra.get(bs.network_switch, float('inf')))
+        round_dijkstra: Dict, round_start_time: float = 0.0,
+        excluded_cids: Optional[set[int]] = None) -> Tuple[List[BaseStation], bool]:
+    """Invite a configured number of clients using a named selection baseline."""
+    excluded_cids = excluded_cids or set()
+    available_ids = [cid for cid in range(len(all_stations)) if cid not in excluded_cids]
+    available_stations = [all_stations[cid] for cid in available_ids]
+    n_clients = min(cfg.n_clients, len(available_stations))
+    if n_clients == 0:
+        return [], False
+    sorted_asc = sorted(
+        available_stations,
+        key=lambda bs: round_dijkstra.get(bs.network_switch, float('inf')),
+    )
     is_hl = (cfg.high_latency_periodicity > 0 and round_num % cfg.high_latency_periodicity == 0)
-    if cfg.selection_mode == "latency":
-        selected = sorted_asc[:n_clients]
-    else:
-        model_size = get_model_size_mb(global_image_model)
-        estimated_times = {}
-        for idx, bs in enumerate(all_stations):
-            timing = compute_client_timing(
-                bs, idx, len(_partitions[idx]) if idx < len(_partitions) else 100,
-                cfg.local_epochs, model_size, cfg, 0.0, round_start_time,
-                client_profile=_client_profiles.get(idx))
-            estimated_times[idx] = timing.t_total
-        chosen, remaining = [], set(estimated_times)
-        while remaining and len(chosen) < n_clients:
-            best = max(remaining, key=lambda cid: _selection_score(
-                cid, chosen, estimated_times, _client_profiles, cfg))
-            chosen.append(best)
-            remaining.remove(best)
-        selected = [all_stations[idx] for idx in chosen]
+
+    # Estimativas comuns ao baseline e ao contexto enviado ao agente.
+    model_size = get_model_size_megabits(global_image_model)
+    estimated_times: Dict[int, float] = {}
+    estimated_timings: Dict[int, ClientTimingResult] = {}
+    for idx in available_ids:
+        bs = all_stations[idx]
+        timing = compute_client_timing(
+            bs, idx, len(_partitions[idx]) if idx < len(_partitions) else 100,
+            cfg.local_epochs, model_size, cfg, 0.0, round_start_time,
+            client_profile=_client_profiles.get(idx))
+        estimated_times[idx] = timing.t_total
+        estimated_timings[idx] = timing
+
+    dijkstra_costs = {
+        cid: round_dijkstra.get(bs.network_switch, float("inf"))
+        for cid, bs in enumerate(all_stations) if cid in available_ids
+    }
+    chosen = choose_client_ids(
+        mode=cfg.selection_mode,
+        candidate_ids=estimated_times,
+        n_clients=n_clients,
+        predicted_times=estimated_times,
+        dijkstra_costs=dijkstra_costs,
+        seed=cfg.seed,
+        round_num=round_num,
+        score_fn=lambda cid, already_selected: _selection_score(
+            cid, already_selected, estimated_times, _client_profiles, cfg
+        ),
+    )
+    selected = [all_stations[idx] for idx in chosen]
     if is_hl and selected:
-        n_high = max(1, int(n_clients * cfg.high_latency_fraction))
+        n_high = (
+            min(n_clients, max(1, int(n_clients * cfg.high_latency_fraction)))
+            if cfg.high_latency_fraction > 0 else 0
+        )
         high_pool = sorted(sorted_asc, key=lambda bs: round_dijkstra.get(bs.network_switch, 0.0), reverse=True)[:n_high]
         retained = [bs for bs in selected if bs not in high_pool][:max(0, n_clients - n_high)]
         selected = retained + high_pool
         print(f"  [Round {round_num}] Alta-latencia: {n_high} clientes HL + {len(retained)} normais")
+
+    # O Agno recebe todos os candidatos em uma unica chamada por rodada.
+    # Em shadow, decide e audita, mas AgnoRoundPolicy devolve o fallback.
+    if _agno_policy is not None:
+        station_to_idx = {bs.id: idx for idx, bs in enumerate(all_stations)}
+        baseline_ids = {station_to_idx[bs.id] for bs in selected}
+        fallback = {
+            cid: ("select" if cid in baseline_ids else "skip")
+        for cid in available_ids
+        }
+
+        timing_values = list(estimated_times.values())
+        if cfg.deadline_mode == "fixed":
+            provisional_deadline = cfg.round_deadline
+        else:
+            provisional_deadline = (
+                float(np.percentile(timing_values, cfg.deadline_percentile))
+                if timing_values else 0.0
+            )
+
+        candidates = []
+        for cid in available_ids:
+            bs = all_stations[cid]
+            timing = estimated_timings[cid]
+            profile = _client_profiles.get(cid)
+            counts = np.asarray(profile.label_counts if profile else [], dtype=float)
+            distribution = (
+                (counts / counts.sum()).round(4).tolist()
+                if counts.size and counts.sum() > 0 else []
+            )
+            cpu_cores = bs.edge_servers[0].cpu if bs.edge_servers else 32
+            history = _client_history_for_agent(cid)
+            candidates.append({
+                "cid": cid,
+                "bs_id": bs.id,
+                "infrastructure": {
+                    "cpu_cores": cpu_cores,
+                    "latency_ms": timing.latency_ms,
+                    "bandwidth_mbps": timing.bandwidth_mbps,
+                },
+                "data": {
+                    "n_samples": len(_partitions[cid]) if cid < len(_partitions) else 0,
+                    "class_distribution": distribution,
+                    "entropy": round(profile.entropy, 6) if profile else 0.0,
+                    "js_divergence": round(profile.js_divergence, 6) if profile else 0.0,
+                    "rare_coverage": round(profile.rare_coverage, 6) if profile else 0.0,
+                    "information_score": round(profile.information_score, 6) if profile else 0.0,
+                },
+                "predicted_timing": {
+                    "download_s": timing.t_down,
+                    "compute_s": timing.t_comp,
+                    "upload_s": timing.t_up,
+                    "total_s": timing.t_total,
+                    "deadline_ratio": round(
+                        timing.t_total / provisional_deadline, 4
+                    ) if provisional_deadline > 0 else None,
+                },
+                "history": history,
+                "previous_contribution": {
+                    "mean_update_norm": history["mean_update_norm"],
+                    "mean_alignment_with_aggregate": history[
+                        "mean_alignment_with_aggregate"
+                    ],
+                },
+            })
+
+        recent_rounds = [{
+            "round": entry.get("round"),
+            "val_loss": entry.get("val_loss"),
+            "val_acc": entry.get("val_acc"),
+            "clients_on_time": entry.get("clients_on_time"),
+            "clients_late": entry.get("clients_late"),
+        } for entry in fl_round_log[-3:]]
+
+        policy_result = _agno_policy.decide(
+            phase="pre_round",
+            context={
+                "run_id": _agno_run_id,
+                "round": round_num,
+                "required_clients": n_clients,
+                "selection_baseline": cfg.selection_mode,
+                "high_latency_round": is_hl,
+                "deadline": {
+                    "mode": cfg.deadline_mode,
+                    "provisional_s": round(provisional_deadline, 3),
+                    "percentile": cfg.deadline_percentile,
+                },
+                "recent_rounds": recent_rounds,
+                "candidates": candidates,
+            },
+            allowed_actions={"select", "skip"},
+            fallback=fallback,
+            required_counts={"select": n_clients},
+        )
+        selected_ids = [
+            cid for cid, action in policy_result.actions.items()
+            if action == "select"
+        ]
+        # Defesa adicional: nunca deixa uma resposta externa quebrar a cardinalidade.
+        if len(selected_ids) != n_clients:
+            selected_ids = sorted(baseline_ids)
+            print("  [Agno] Cardinalidade invalida; usando selecao baseline.")
+        selected = [all_stations[cid] for cid in selected_ids]
+
+        if cfg.agent_policy_mode == "shadow":
+            proposed_ids = sorted(
+                cid for cid, detail in policy_result.proposed_details.items()
+                if detail.get("action") == "select"
+            )
+            if proposed_ids:
+                print(f"  [Agno shadow] proposta={proposed_ids} | "
+                      f"aplicado_baseline={sorted(baseline_ids)}")
+            else:
+                print("  [Agno shadow] sem proposta valida; baseline aplicado.")
+
+    for cid, bs in enumerate(all_stations):
+        if bs in selected:
+            state = _agent_selection_history.setdefault(cid, {
+                "times_selected": 0, "last_selected_round": None,
+            })
+            state["times_selected"] += 1
+            state["last_selected_round"] = round_num
     return selected, is_hl
 
 
@@ -1076,15 +1276,7 @@ def _select_clients_for_round(
 # ==============================================================================
 
 class TopologyAwareFedAvg(FlowerFedAvg):
-    """
-    Extensao de FedAvg que:
-      - Seleciona clientes por distancia Dijkstra ao servidor central
-      - Simula rounds de alta-latencia (clientes mais distantes)
-      - Modela tempos de comunicacao (download/upload), computacao local e arrival_time
-      - Aplica deadlines por rodada e calcula nivel de staleness
-      - Coleta metricas de informatividade (||Delta w||_2, loss, entropia) e notifica a GUI
-      - Salva os parametros finais para atualizacao do modelo global
-    """
+    """Flower Strategy with virtual deadlines, delayed updates, and audited decisions."""
 
     def __init__(
         self,
@@ -1093,41 +1285,104 @@ class TopologyAwareFedAvg(FlowerFedAvg):
         fl_history: FLHistory,
         gui_callback=None,
         status_callback=None,
+        recorder: Optional[RunArtifactRecorder] = None,
         **kwargs,
     ):
-        self.cfg             = cfg
+        self.cfg = cfg
         self.sorted_stations = sorted_stations
-        self.fl_history      = fl_history
-        self.gui_callback    = gui_callback
+        self.fl_history = fl_history
+        self.gui_callback = gui_callback
         self.status_callback = status_callback
-
-        self._round_dijkstra:         Dict = {}
-        self._last_is_hl:             bool = False
-        self._last_selected_indices:  List[int] = []
-        self._last_fit_metrics:       Dict = {}
+        self.recorder = recorder
+        self._round_dijkstra: Dict = {}
+        self._last_is_hl = False
+        self._last_fit_metrics: Dict = {}
         self._last_aggregated_params: Optional[Parameters] = None
-        self._client_staleness:       Dict[int, int] = {}
-        self._virtual_time:           float = 0.0
-        self._round_deadline:         float = 0.0
-        self._client_timings:         Dict[int, ClientTimingResult] = {}
+        self._current_parameters: Optional[Parameters] = None
+        self._virtual_time = 0.0
+        self._round_start_time = 0.0
+        self._round_deadline = 0.0
+        self._client_timings: Dict[int, ClientTimingResult] = {}
+        self._invited_by_round: Dict[int, set[int]] = {}
+        self._model_version = 0
+        self._pending_updates: List[PendingUpdate] = []
 
         super().__init__(
             fraction_fit=1.0,
-            fraction_evaluate=1.0,
+            fraction_evaluate=0.0,
             min_fit_clients=min(cfg.n_clients, len(sorted_stations)),
-            min_evaluate_clients=min(cfg.n_clients, len(sorted_stations)),
+            min_evaluate_clients=0,
             min_available_clients=len(sorted_stations),
-            fit_metrics_aggregation_fn=_weighted_average_metrics,
-            evaluate_metrics_aggregation_fn=_weighted_average_metrics,
             **kwargs,
         )
 
     def _sorted_proxies(self, client_manager) -> List[ClientProxy]:
-        all_proxies = client_manager.all()
         return sorted(
-            all_proxies.values(),
-            key=lambda p: int(p.cid) if str(p.cid).lstrip('-').isdigit() else 0
+            client_manager.all().values(),
+            key=lambda proxy: int(proxy.cid) if str(proxy.cid).lstrip("-").isdigit() else 0,
         )
+
+    def _proxy_index(self, proxy: ClientProxy) -> int:
+        try:
+            return int(proxy.cid) % len(self.sorted_stations)
+        except (TypeError, ValueError):
+            return 0
+
+    def _record_state(self, round_num: int, cid: int, state: str, **details: Any) -> None:
+        if self.recorder is not None:
+            self.recorder.record_client_state(round_num, cid, state, **details)
+
+    def _client_context(self, cid: int, timing: Optional[ClientTimingResult] = None,
+                        metrics: Optional[Dict] = None, staleness_tau: int = 0) -> Dict[str, Any]:
+        station = self.sorted_stations[cid]
+        profile = _client_profiles.get(cid)
+        counts = np.asarray(profile.label_counts if profile else [], dtype=float)
+        distribution = (
+            (counts / counts.sum()).round(6).tolist()
+            if counts.size and counts.sum() > 0 else []
+        )
+        network_latency, bandwidth, _ = get_path_network_metrics(station)
+        history = _client_history_for_agent(cid)
+        result: Dict[str, Any] = {
+            "cid": cid,
+            "bs_id": station.id,
+            "infrastructure": {
+                "cpu_cores": station.edge_servers[0].cpu if station.edge_servers else 32,
+                "latency_ms": round(float(network_latency), 4),
+                "bandwidth_mbps": round(float(bandwidth), 4),
+            },
+            "data": {
+                "n_samples": len(_partitions[cid]) if cid < len(_partitions) else 0,
+                "class_distribution": distribution,
+                "entropy": round(profile.entropy, 6) if profile else 0.0,
+                "js_divergence": round(profile.js_divergence, 6) if profile else 0.0,
+                "rare_coverage": round(profile.rare_coverage, 6) if profile else 0.0,
+                "information_score": round(profile.information_score, 6) if profile else 0.0,
+            },
+            "history": history,
+            "previous_contribution": {
+                "mean_update_norm": history["mean_update_norm"],
+                "mean_alignment_with_aggregate": history["mean_alignment_with_aggregate"],
+            },
+            "staleness_tau": staleness_tau,
+        }
+        if timing is not None:
+            result["predicted_timing"] = {
+                "download_s": timing.t_down,
+                "compute_s": timing.t_comp,
+                "upload_s": timing.t_up,
+                "total_s": timing.t_total,
+                "arrival_time": timing.arrival_time,
+                "deadline": timing.deadline,
+                "on_time": timing.on_time,
+            }
+        if metrics:
+            result["current_update"] = {
+                "train_loss": float(metrics.get("train_loss", 0.0)),
+                "train_acc": float(metrics.get("train_acc", 0.0)),
+                "update_norm": float(metrics.get("update_norm", 0.0)),
+            }
+        return result
 
     def configure_fit(self, server_round, parameters, client_manager):
         if self.status_callback:
@@ -1136,246 +1391,523 @@ class TopologyAwareFedAvg(FlowerFedAvg):
             )
 
         client_manager.wait_for(len(self.sorted_stations), timeout=86400)
-
+        self._current_parameters = parameters
+        self._round_start_time = self._virtual_time
         self._round_dijkstra = _build_round_dijkstra(self.cfg)
 
+        pending_cids = {update.cid for update in self._pending_updates}
+        if len(pending_cids) == len(self.sorted_stations) and self._pending_updates:
+            # Advance the virtual clock with one client while preventing a second
+            # deferred update from that client until its existing update closes.
+            oldest = min(
+                self._pending_updates,
+                key=lambda update: (update.arrival_time, update.invited_round),
+            )
+            pending_cids.discard(oldest.cid)
         selected_stations, is_hl = _select_clients_for_round(
-            server_round, self.cfg, self.sorted_stations, self._round_dijkstra
+            server_round,
+            self.cfg,
+            self.sorted_stations,
+            self._round_dijkstra,
+            round_start_time=self._round_start_time,
+            excluded_cids=pending_cids,
         )
         self._last_is_hl = is_hl
+        station_to_idx = {station.id: idx for idx, station in enumerate(self.sorted_stations)}
+        selected_indices = [station_to_idx[station.id] for station in selected_stations]
+        self._invited_by_round[server_round] = set(selected_indices)
 
-        station_to_idx = {bs.id: i for i, bs in enumerate(self.sorted_stations)}
-        selected_indices = [station_to_idx[bs.id] for bs in selected_stations]
-        self._last_selected_indices = selected_indices
-
-        # Tamanho do modelo em Megabits (Mb)
-        model_size_mb = get_model_size_mb(global_image_model)
-
-        # Computa estimativas de tempo dos clientes selecionados
-        tentative_timings: Dict[int, ClientTimingResult] = {}
-        for idx in selected_indices:
-            bs = self.sorted_stations[idx]
-            n_samp = len(_partitions[idx]) if idx < len(_partitions) else 100
-            t_res = compute_client_timing(
-                client_station=bs,
-                cid=idx,
-                n_samples=n_samp,
+        model_size = get_model_size_megabits(global_image_model)
+        tentative: Dict[int, ClientTimingResult] = {}
+        for cid in selected_indices:
+            station = self.sorted_stations[cid]
+            profile = _client_profiles.get(cid)
+            tentative[cid] = compute_client_timing(
+                client_station=station,
+                cid=cid,
+                n_samples=len(_partitions[cid]),
                 epochs=self.cfg.local_epochs,
-                model_size_mb=model_size_mb,
+                model_size_megabits=model_size,
                 cfg=self.cfg,
                 round_deadline=0.0,
-                round_start_time=self._virtual_time,
-                accumulated_staleness=self._client_staleness.get(idx, 0)
+                round_start_time=self._round_start_time,
+                client_profile=profile,
             )
-            tentative_timings[idx] = t_res
 
-        # Define deadline da rodada
-        times_list = [t.t_total for t in tentative_timings.values()]
-        if self.cfg.deadline_mode == "fixed":
-            round_deadline = self.cfg.round_deadline
-        else:
-            round_deadline = float(np.percentile(times_list, self.cfg.deadline_percentile)) if times_list else 10.0
-
-        self._round_deadline = round(round_deadline, 3)
-
-        # Atualiza status on_time e staleness com base no deadline definido
+        self._round_deadline = (
+            choose_round_deadline(
+                [timing.t_total for timing in tentative.values()],
+                self.cfg.deadline_mode,
+                self.cfg.round_deadline,
+                self.cfg.deadline_percentile,
+            )
+            if tentative else max(float(self.cfg.round_deadline), 0.001)
+        )
         self._client_timings = {}
-        for idx, t_res in tentative_timings.items():
-            t_res.deadline = self._round_deadline
-            t_res.on_time  = (t_res.t_total <= self._round_deadline)
-            if t_res.on_time:
-                t_res.staleness = self._client_staleness.get(idx, 0)
-            else:
-                t_res.staleness = self._client_staleness.get(idx, 0) + 1
-            self._client_timings[idx] = t_res
+        for cid, timing in tentative.items():
+            timing.deadline = self._round_deadline
+            timing.on_time = deadline_status(
+                timing.arrival_time, self._round_start_time + self._round_deadline
+            )[0]
+            timing.staleness = 0
+            self._client_timings[cid] = timing
+            self._record_state(
+                server_round,
+                cid,
+                "invited",
+                base_model_version=self._model_version,
+                predicted_arrival_time=timing.arrival_time,
+                predicted_duration_s=timing.t_total,
+                deadline_s=self._round_deadline,
+                on_time=timing.on_time,
+            )
 
-        proxies = self._sorted_proxies(client_manager)
-        selected_proxies = [proxies[idx] for idx in selected_indices if idx < len(proxies)]
-
-        hl_tag = "  HL" if is_hl else ""
-        print(f"\n  -- Round {server_round}/{self.cfg.n_rounds} [{self.cfg.weight_mode}]{hl_tag} --")
-        if times_list:
-            print(f"  Deadline do round: {self._round_deadline:.2f}s | "
-                  f"Tempos estimados: min={min(times_list):.2f}s, med={np.mean(times_list):.2f}s, max={max(times_list):.2f}s")
-
-        config  = {"local_epochs": self.cfg.local_epochs}
+        proxies_by_cid = {
+            self._proxy_index(proxy): proxy for proxy in self._sorted_proxies(client_manager)
+        }
+        config = {
+            "local_epochs": self.cfg.local_epochs,
+            "server_round": server_round,
+            "base_model_version": self._model_version,
+        }
         fit_ins = FitIns(parameters, config)
-        return [(proxy, fit_ins) for proxy in selected_proxies]
+        return [
+            (proxies_by_cid[cid], fit_ins)
+            for cid in selected_indices
+            if cid in proxies_by_cid
+        ]
 
     def configure_evaluate(self, server_round, parameters, client_manager):
-        proxies = self._sorted_proxies(client_manager)
-        selected_proxies = [proxies[idx] for idx in self._last_selected_indices
-                            if idx < len(proxies)]
-        evaluate_ins = EvaluateIns(parameters, {})
-        return [(proxy, evaluate_ins) for proxy in selected_proxies]
+        # Validation occurs once on the global test set in evaluate_and_record_round.
+        return []
+
+    def _decide_post_deadline(
+        self,
+        server_round: int,
+        decision_group: str,
+        candidates: List[Dict[str, Any]],
+        fallback: Dict[int, str],
+        allowed_actions: set[str],
+        allowed_by_client: Optional[Dict[int, set[str]]] = None,
+    ) -> Dict[int, str]:
+        if not candidates:
+            return {}
+        if _agno_policy is None:
+            return fallback
+        result = _agno_policy.decide(
+            phase="post_deadline",
+            context={
+                "run_id": _agno_run_id,
+                "round": server_round,
+                "decision_group": decision_group,
+                "round_start_time": self._round_start_time,
+                "round_deadline_s": self._round_deadline,
+                "round_end_time": self._round_start_time + self._round_deadline,
+                "current_model_version": self._model_version,
+                "max_staleness": self.cfg.max_staleness,
+                "updates": candidates,
+            },
+            allowed_actions=allowed_actions,
+            fallback=fallback,
+            client_allowed_actions=allowed_by_client,
+        )
+        return result.actions
 
     def aggregate_fit(self, server_round, results, failures):
-        if not results:
-            return None, {}
+        if self._current_parameters is None:
+            raise RuntimeError("Strategy recebeu resultados sem parametros globais")
 
-        clients_detail = []
-        eff_results    = []
-
-        for proxy, fit_res in results:
-            idx = (int(proxy.cid) % len(self.sorted_stations)
-                   if str(proxy.cid).lstrip('-').isdigit() else 0)
-            bs = self.sorted_stations[idx]
-            m  = fit_res.metrics
-            n  = fit_res.num_examples
-
-            timing = self._client_timings.get(idx)
-            if timing is None:
-                timing = compute_client_timing(
-                    bs, idx, n, self.cfg.local_epochs,
-                    get_model_size_mb(global_image_model),
-                    self.cfg, self._round_deadline, self._virtual_time,
-                    self._client_staleness.get(idx, 0)
-                )
-
-            # Atualiza staleness para as proximas rodadas
-            if timing.on_time:
-                self._client_staleness[idx] = 0
-            else:
-                self._client_staleness[idx] = timing.staleness
-
-            train_loss  = float(m.get("train_loss",  0.0))
-            train_acc   = float(m.get("train_acc",   0.0))
-            update_norm = float(m.get("update_norm", 0.0))
-            entropy     = float(m.get("entropy",     0.0))
-
-            # Se drop_stragglers=True e cliente atrasou, ignora na agregacao
-            if self.cfg.late_update_policy == "discard" and not timing.on_time:
-                print(f"    [STRAGGLER DESCARTADO] C{idx:02d}|BS{bs.id} "
-                      f"t={timing.t_total:.2f}s > deadline={self._round_deadline:.2f}s")
-                continue
-
-            # Peso efetivo ajustado por staleness: n / ((1 + tau)^gamma)
-            eff_weight = float(n)
-            if self.cfg.enable_staleness and timing.staleness > 0:
-                eff_weight = float(n) / ((1.0 + timing.staleness) ** self.cfg.staleness_gamma)
-
-            eff_results.append((proxy, fit_res, eff_weight))
-
+        round_end_time = self._round_start_time + self._round_deadline
+        selected = self._invited_by_round.pop(server_round, set())
+        received: Dict[int, tuple[ClientProxy, FitRes]] = {
+            self._proxy_index(proxy): (proxy, fit_res) for proxy, fit_res in results
+        }
+        accepted: List[tuple[int, NDArrays, int, Dict, float, Dict]] = []
+        clients_detail: List[Dict[str, Any]] = []
+        for cid in sorted(selected - set(received)):
+            self._record_state(server_round, cid, "failed", reason="cliente sem FitRes")
             clients_detail.append({
-                "cid":          idx,
-                "bs_id":        bs.id,
-                "dist_ms":      timing.latency_ms,
-                "loss":         train_loss,
-                "acc":          train_acc,
-                "t_down":       timing.t_down,
-                "t_comp":       timing.t_comp,
-                "t_up":         timing.t_up,
-                "t_total":      timing.t_total,
-                "arrival_time": timing.arrival_time,
-                "deadline":     self._round_deadline,
-                "on_time":      timing.on_time,
-                "staleness":    timing.staleness,
-                "bandwidth":    timing.bandwidth_mbps,
-                "update_norm":  update_norm,
-                "entropy":      entropy,
+                "cid": cid,
+                "bs_id": self.sorted_stations[cid].id,
+                "on_time": False,
+                "staleness": 0,
+                "status": "failed",
             })
 
-        if not eff_results:
-            print("  [AVISO] Nenhum cliente qualificado para agregacao. Mantendo modelo atual.")
-            return None, {}
+        arrived_pending: List[tuple[PendingUpdate, int]] = []
+        still_pending: List[PendingUpdate] = []
+        for update in self._pending_updates:
+            tau = compute_staleness(self._model_version, update.base_version)
+            if tau > self.cfg.max_staleness:
+                self._record_state(
+                    server_round, update.cid, "discarded_staleness",
+                    invited_round=update.invited_round,
+                    staleness_tau=tau,
+                    max_staleness=self.cfg.max_staleness,
+                )
+                clients_detail.append({
+                    "cid": update.cid,
+                    "bs_id": self.sorted_stations[update.cid].id,
+                    "on_time": False,
+                    "staleness": tau,
+                    "status": "discarded_staleness",
+                    "invited_round": update.invited_round,
+                })
+            elif update.arrival_time <= round_end_time:
+                arrived_pending.append((update, tau))
+            else:
+                still_pending.append(update)
+        self._pending_updates = still_pending
 
-        # Media ponderada com pesos ajustados
-        total_eff_weight = sum(w for _, _, w in eff_results)
-        weights_per_client = [parameters_to_ndarrays(fit_res.parameters) for _, fit_res, _ in eff_results]
+        if arrived_pending:
+            candidates = []
+            fallback = {}
+            for update, tau in arrived_pending:
+                fallback[update.cid] = "accept_stale"
+                candidate = self._client_context(
+                    update.cid, metrics=update.metrics, staleness_tau=tau
+                )
+                candidate.update({
+                    "invited_round": update.invited_round,
+                    "base_model_version": update.base_version,
+                    "arrival_time": update.arrival_time,
+                    "lateness_seconds": max(0.0, update.arrival_time - (
+                        update.round_start_time + update.round_deadline
+                    )),
+                    "allowed_actions": ["accept_stale", "reduce_weight", "discard"],
+                })
+                candidates.append(candidate)
+            actions = self._decide_post_deadline(
+                server_round, "arrived_pending", candidates, fallback,
+                {"accept_stale", "reduce_weight", "discard"},
+            )
+            for update, tau in arrived_pending:
+                action = actions.get(update.cid, "accept_stale")
+                if action == "discard":
+                    state = "discarded_deadline"
+                    effective_weight = 0.0
+                    clients_detail.append({
+                        "cid": update.cid,
+                        "bs_id": self.sorted_stations[update.cid].id,
+                        "on_time": False,
+                        "staleness": tau,
+                        "status": state,
+                        "arrival_time": update.arrival_time,
+                        "effective_weight": 0.0,
+                        "invited_round": update.invited_round,
+                    })
+                else:
+                    factor = self.cfg.late_update_weight_factor if action == "reduce_weight" else 1.0
+                    gamma = self.cfg.staleness_gamma if self.cfg.enable_staleness else 0.0
+                    effective_weight = effective_sample_weight(
+                        update.n_samples, tau, gamma,
+                        factor if self.cfg.enable_staleness or factor < 1 else 1.0,
+                    )
+                    state = "accepted_reduced" if action == "reduce_weight" else "accepted_stale"
+                    accepted.append((
+                        update.cid, update.payload, update.n_samples, update.metrics,
+                        effective_weight, {
+                            "cid": update.cid,
+                            "bs_id": self.sorted_stations[update.cid].id,
+                            "t_total": update.t_total,
+                            "arrival_time": update.arrival_time,
+                            "deadline": update.round_deadline,
+                            "on_time": False,
+                            "staleness": tau,
+                            "status": state,
+                            "update_norm": float(update.metrics.get("update_norm", 0.0)),
+                            "entropy": float(update.metrics.get("entropy", 0.0)),
+                            "js_divergence": float(update.metrics.get("js_divergence", 0.0)),
+                            "rare_coverage": float(update.metrics.get("rare_coverage", 0.0)),
+                            "effective_weight": effective_weight,
+                            "invited_round": update.invited_round,
+                        },
+                    ))
+                self._record_state(
+                    server_round, update.cid, state,
+                    invited_round=update.invited_round,
+                    base_model_version=update.base_version,
+                    staleness_tau=tau,
+                    effective_weight=effective_weight,
+                    action=action,
+                )
 
-        aggregated_ndarrays = [
-            sum(w[layer_idx] * (eff_w / total_eff_weight)
-                for w, (_, _, eff_w) in zip(weights_per_client, eff_results))
-            for layer_idx in range(len(weights_per_client[0]))
-        ]
-        aggregated_params = ndarrays_to_parameters(aggregated_ndarrays)
-        self._last_aggregated_params = aggregated_params
+        late_current: List[tuple[int, NDArrays, int, Dict, ClientTimingResult]] = []
+        for cid, (_proxy, fit_res) in received.items():
+            timing = self._client_timings.get(cid)
+            if timing is None:
+                self._record_state(server_round, cid, "failed", reason="tempo previsto ausente")
+                continue
+            metrics = dict(fit_res.metrics)
+            profile = _client_profiles.get(cid)
+            metrics.setdefault("js_divergence", profile.js_divergence if profile else 0.0)
+            metrics.setdefault("rare_coverage", profile.rare_coverage if profile else 0.0)
+            if timing.on_time:
+                weight = effective_sample_weight(fit_res.num_examples)
+                detail = {
+                    "cid": cid, "bs_id": self.sorted_stations[cid].id,
+                    "loss": float(metrics.get("train_loss", 0.0)),
+                    "acc": float(metrics.get("train_acc", 0.0)),
+                    "t_down": timing.t_down, "t_comp": timing.t_comp,
+                    "t_up": timing.t_up, "t_total": timing.t_total,
+                    "arrival_time": timing.arrival_time, "deadline": self._round_deadline,
+                    "on_time": True, "staleness": 0, "status": "on_time",
+                    "bandwidth": timing.bandwidth_mbps, "latency_ms": timing.latency_ms,
+                    "update_norm": float(metrics.get("update_norm", 0.0)),
+                    "entropy": float(metrics.get("entropy", 0.0)),
+                    "js_divergence": float(metrics.get("js_divergence", 0.0)),
+                    "rare_coverage": float(metrics.get("rare_coverage", 0.0)),
+                    "effective_weight": weight,
+                }
+                accepted.append((cid, parameters_to_ndarrays(fit_res.parameters),
+                                 fit_res.num_examples, metrics, weight, detail))
+                self._record_state(
+                    server_round, cid, "on_time", arrival_time=timing.arrival_time,
+                    deadline_s=self._round_deadline, effective_weight=weight,
+                    base_model_version=self._model_version,
+                )
+            else:
+                late_current.append((
+                    cid, parameters_to_ndarrays(fit_res.parameters),
+                    fit_res.num_examples, metrics, timing,
+                ))
 
-        # Metricas agregadas
-        total_samples  = sum(r.num_examples for _, r, _ in eff_results)
-        agg_train_loss = sum(float(r.metrics.get("train_loss",  0.0)) * w for _, r, w in eff_results) / total_eff_weight
-        agg_train_acc  = sum(float(r.metrics.get("train_acc",   0.0)) * w for _, r, w in eff_results) / total_eff_weight
-        agg_up_norm    = sum(float(r.metrics.get("update_norm", 0.0)) * w for _, r, w in eff_results) / total_eff_weight
+        if late_current:
+            candidates = []
+            fallback = {}
+            allowed_by_client: Dict[int, set[str]] = {}
+            pending_cids = {update.cid for update in self._pending_updates}
+            for cid, _weights, _n, metrics, timing in late_current:
+                allowed_for_client = {"defer", "discard", "reduce_weight"}
+                if cid in pending_cids:
+                    allowed_for_client = {"discard", "reduce_weight"}
+                allowed_by_client[cid] = allowed_for_client
+                action = {
+                    "defer": "defer",
+                    "discard": "discard",
+                    "reduced_weight": "reduce_weight",
+                }[self.cfg.late_update_policy]
+                if action not in allowed_for_client:
+                    action = "discard"
+                fallback[cid] = action
+                candidate = self._client_context(cid, timing, metrics)
+                candidate.update({
+                    "base_model_version": self._model_version,
+                    "lateness_seconds": max(0.0, timing.arrival_time - (
+                        self._round_start_time + self._round_deadline
+                    )),
+                    "allowed_actions": sorted(allowed_for_client),
+                })
+                candidates.append(candidate)
+            actions = self._decide_post_deadline(
+                server_round, "new_late_updates", candidates, fallback,
+                {"defer", "discard", "reduce_weight"}, allowed_by_client,
+            )
+            for cid, weights, n_samples, metrics, timing in late_current:
+                action = actions.get(cid, fallback[cid])
+                profile = _client_profiles.get(cid)
+                detail = {
+                    "cid": cid, "bs_id": self.sorted_stations[cid].id,
+                    "loss": float(metrics.get("train_loss", 0.0)),
+                    "acc": float(metrics.get("train_acc", 0.0)),
+                    "t_down": timing.t_down, "t_comp": timing.t_comp,
+                    "t_up": timing.t_up, "t_total": timing.t_total,
+                    "arrival_time": timing.arrival_time, "deadline": self._round_deadline,
+                    "on_time": False, "staleness": 0,
+                    "bandwidth": timing.bandwidth_mbps, "latency_ms": timing.latency_ms,
+                    "update_norm": float(metrics.get("update_norm", 0.0)),
+                    "entropy": float(metrics.get("entropy", 0.0)),
+                    "js_divergence": profile.js_divergence if profile else 0.0,
+                    "rare_coverage": profile.rare_coverage if profile else 0.0,
+                    "action": action,
+                }
+                if action == "defer":
+                    detail["status"] = "late_pending"
+                    pending = PendingUpdate(
+                        cid=cid,
+                        base_version=self._model_version,
+                        arrival_time=timing.arrival_time,
+                        payload=weights,
+                        n_samples=n_samples,
+                        metrics=metrics,
+                        invited_round=server_round,
+                        round_start_time=self._round_start_time,
+                        round_deadline=self._round_deadline,
+                        t_total=timing.t_total,
+                    )
+                    self._pending_updates.append(pending)
+                    self._record_state(
+                        server_round, cid, "late_pending",
+                        arrival_time=timing.arrival_time,
+                        deadline_s=self._round_deadline,
+                        base_model_version=self._model_version,
+                        lateness_seconds=max(0.0, timing.arrival_time - round_end_time),
+                        action=action,
+                    )
+                elif action == "discard":
+                    detail["status"] = "discarded_deadline"
+                    self._record_state(
+                        server_round, cid, "discarded_deadline",
+                        arrival_time=timing.arrival_time,
+                        deadline_s=self._round_deadline,
+                        action=action,
+                    )
+                else:
+                    weight = effective_sample_weight(
+                        n_samples, 0, self.cfg.staleness_gamma,
+                        self.cfg.late_update_weight_factor,
+                    )
+                    detail.update({
+                        "status": "accepted_reduced",
+                        "effective_weight": weight,
+                    })
+                    accepted.append((cid, weights, n_samples, metrics, weight, detail))
+                    self._record_state(
+                        server_round, cid, "accepted_reduced",
+                        arrival_time=timing.arrival_time,
+                        deadline_s=self._round_deadline,
+                        effective_weight=weight,
+                        action=action,
+                        base_model_version=self._model_version,
+                    )
+                clients_detail.append(detail)
 
-        on_time_count = sum(1 for c in clients_detail if c["on_time"])
-        late_count    = sum(1 for c in clients_detail if not c["on_time"])
-        times = [c["t_total"] for c in clients_detail]
-        min_time = min(times) if times else 0.0
-        max_time = max(times) if times else 0.0
-        avg_time = float(np.mean(times)) if times else 0.0
+        clients_detail.extend(item[5] for item in accepted if item[5] not in clients_detail)
+        current_arrays = parameters_to_ndarrays(self._current_parameters)
+        if accepted:
+            weighted_updates = [(item[1], item[4]) for item in accepted]
+            aggregated_arrays = weighted_average_updates(weighted_updates)
+            for item in accepted:
+                item[5]["alignment_with_aggregate"] = update_alignment(
+                    current_arrays, item[1], aggregated_arrays
+                )
+            aggregated_parameters = ndarrays_to_parameters(aggregated_arrays)
+            self._last_aggregated_params = aggregated_parameters
+            self._current_parameters = aggregated_parameters
+            self._model_version += 1
+            current_arrays = aggregated_arrays
+            total_effective_weight = sum(item[4] for item in accepted)
+            total_samples = sum(item[2] for item in accepted)
+            train_loss = sum(
+                float(item[3].get("train_loss", 0.0)) * item[4] for item in accepted
+            ) / total_effective_weight
+            train_acc = sum(
+                float(item[3].get("train_acc", 0.0)) * item[4] for item in accepted
+            ) / total_effective_weight
+            update_norm = sum(
+                float(item[3].get("update_norm", 0.0)) * item[4] for item in accepted
+            ) / total_effective_weight
+            aggregated_result = aggregated_parameters
+        else:
+            train_loss = train_acc = update_norm = 0.0
+            total_samples = 0
+            aggregated_result = None
 
+        timing_values = [self._client_timings[cid].t_total for cid in selected
+                         if cid in self._client_timings]
         self._last_fit_metrics = {
-            "n_clients":       len(clients_detail),
-            "total_samples":   total_samples,
-            "train_loss":      agg_train_loss,
-            "train_acc":       agg_train_acc,
-            "update_norm":     agg_up_norm,
-            "deadline":        self._round_deadline,
-            "clients_on_time": on_time_count,
-            "clients_late":    late_count,
-            "min_time":        min_time,
-            "max_time":        max_time,
-            "avg_time":        avg_time,
-            "clients_detail":  clients_detail,
+            "n_clients": len(selected),
+            "total_samples": total_samples,
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "update_norm": update_norm,
+            "deadline": self._round_deadline,
+            "clients_on_time": sum(1 for cid in selected
+                                   if cid in self._client_timings and self._client_timings[cid].on_time),
+            "clients_late": sum(1 for cid in selected
+                                if cid in self._client_timings and not self._client_timings[cid].on_time),
+            "min_time": min(timing_values, default=0.0),
+            "max_time": max(timing_values, default=0.0),
+            "avg_time": float(np.mean(timing_values)) if timing_values else 0.0,
+            "clients_detail": clients_detail,
+            "model_version": self._model_version,
         }
-
-        # Avanco do relogio virtual da simulacao
-        step_time = max_time if (max_time <= self._round_deadline) else self._round_deadline
-        self._virtual_time += step_time
-
-        print(f"  Servidor: FedAvg -> {len(eff_results)} clientes ({total_samples} amostras) | "
-              f"Deadline: {self._round_deadline:.2f}s | No prazo: {on_time_count}/{len(clients_detail)} | "
-              f"||Δw||={agg_up_norm:.3f}")
-
+        self._virtual_time = round_end_time
         self.fl_history.add_fit_metrics(server_round, {
-            "train_loss":  agg_train_loss,
-            "train_acc":   agg_train_acc,
-            "update_norm": agg_up_norm,
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "update_norm": update_norm,
         })
+        self.evaluate_and_record_round(
+            server_round, aggregated_result or self._current_parameters,
+        )
+        return aggregated_result, {}
 
-        return aggregated_params, {}
-
-    def aggregate_evaluate(self, server_round, results, failures):
-        if not results:
-            return None, {}
-
-        loss_aggregated, metrics = super().aggregate_evaluate(server_round, results, failures)
-
-        val_acc  = float(metrics.get("accuracy", 0.0))
-        val_loss = float(loss_aggregated) if loss_aggregated is not None else 0.0
-
-        print(f"  Round {server_round} - Loss: {val_loss:.4f} | Ac.: {val_acc*100:.2f}%")
-
+    def evaluate_and_record_round(self, server_round: int,
+                                  parameters: Parameters) -> Tuple[float, Dict]:
+        """Evaluate the global model once and persist the round result."""
+        val_loss, val_acc = evaluate_global_weights(parameters_to_ndarrays(parameters))
         self.fl_history.losses_distributed.append((server_round, val_loss))
         self.fl_history.add_eval_metrics(server_round, {"accuracy": val_acc})
 
-        fit_m = self._last_fit_metrics
+        fit_metrics = self._last_fit_metrics
         round_entry = {
-            "round":           server_round,
-            "n_clients":       fit_m.get("n_clients", 0),
-            "weight_mode":     self.cfg.weight_mode,
-            "is_hl_round":     self._last_is_hl,
-            "total_samples":   fit_m.get("total_samples", 0),
-            "train_loss":      fit_m.get("train_loss", 0.0),
-            "train_acc":       fit_m.get("train_acc",  0.0),
-            "update_norm":     fit_m.get("update_norm", 0.0),
-            "deadline":        fit_m.get("deadline", 0.0),
-            "clients_on_time": fit_m.get("clients_on_time", 0),
-            "clients_late":    fit_m.get("clients_late", 0),
-            "min_time":        fit_m.get("min_time", 0.0),
-            "max_time":        fit_m.get("max_time", 0.0),
-            "avg_time":        fit_m.get("avg_time", 0.0),
-            "val_loss":        val_loss,
-            "val_acc":         val_acc,
-            "clients_detail":  fit_m.get("clients_detail", []),
+            "run_id": _agno_run_id,
+            "round": server_round,
+            "model_version": fit_metrics.get("model_version", self._model_version),
+            "n_clients": fit_metrics.get("n_clients", 0),
+            "weight_mode": self.cfg.weight_mode,
+            "selection_mode": self.cfg.selection_mode,
+            "is_hl_round": self._last_is_hl,
+            "total_samples": fit_metrics.get("total_samples", 0),
+            "train_loss": fit_metrics.get("train_loss", 0.0),
+            "train_acc": fit_metrics.get("train_acc", 0.0),
+            "update_norm": fit_metrics.get("update_norm", 0.0),
+            "deadline": fit_metrics.get("deadline", 0.0),
+            "clients_on_time": fit_metrics.get("clients_on_time", 0),
+            "clients_late": fit_metrics.get("clients_late", 0),
+            "min_time": fit_metrics.get("min_time", 0.0),
+            "max_time": fit_metrics.get("max_time", 0.0),
+            "avg_time": fit_metrics.get("avg_time", 0.0),
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "evaluation_mode": "centralized",
+            "clients_detail": fit_metrics.get("clients_detail", []),
         }
-
         fl_round_log.append(round_entry)
-
+        if self.recorder is not None:
+            self.recorder.record_round(round_entry)
         if self.gui_callback:
             self.gui_callback(server_round, round_entry)
+        return float(val_loss), {"accuracy": float(val_acc)}
 
-        return loss_aggregated, metrics
+    def finalize(self) -> None:
+        """Close all invited updates with a persisted terminal state."""
+        if not self._pending_updates:
+            return
+        candidates = []
+        fallback = {}
+        for update in self._pending_updates:
+            tau = compute_staleness(self._model_version, update.base_version)
+            candidate = self._client_context(update.cid, metrics=update.metrics, staleness_tau=tau)
+            candidate.update({
+                "invited_round": update.invited_round,
+                "arrival_time": update.arrival_time,
+                "lateness_seconds": max(0.0, update.arrival_time - (
+                    update.round_start_time + update.round_deadline
+                )),
+                "final_round": True,
+                "allowed_actions": ["discard"],
+            })
+            candidates.append(candidate)
+            fallback[update.cid] = "discard"
+        actions = self._decide_post_deadline(
+            self.cfg.n_rounds, "experiment_finalization", candidates,
+            fallback, {"discard"},
+        )
+        for update in self._pending_updates:
+            tau = compute_staleness(self._model_version, update.base_version)
+            state = "discarded_staleness" if tau > self.cfg.max_staleness else "discarded_deadline"
+            self._record_state(
+                self.cfg.n_rounds, update.cid, state,
+                invited_round=update.invited_round,
+                base_model_version=update.base_version,
+                staleness_tau=tau,
+                arrival_time=update.arrival_time,
+                action=actions.get(update.cid, "discard"),
+                reason="fim_do_experimento",
+            )
+        self._pending_updates.clear()
 
 
 # ==============================================================================
@@ -1386,7 +1918,6 @@ global_image_model  = CifarCNN()
 fl_model_ready      = False
 fl_training_status  = "Nao treinado"
 fl_history: Optional[FLHistory] = None
-fl_clients: List[CifarFederatedClient] = []
 
 NUM_ROUNDS_FL  = 5
 NUM_CLIENTS_FL = 5
@@ -1395,6 +1926,11 @@ active_config:    Optional[ExperimentConfig] = None
 config_file_name: str = ""
 
 fl_round_log: List[Dict] = []
+
+# Estado da politica Agno para uma execucao completa do experimento.
+_agno_policy: Optional[AgnoRoundPolicy] = None
+_agno_run_id: Optional[str] = None
+_agent_selection_history: Dict[int, Dict[str, Any]] = {}
 
 # Estado preparado por _prepare_fl_state antes de run_simulation
 _sorted_stations: List[BaseStation] = []
@@ -1415,7 +1951,7 @@ def _prepare_fl_state(cfg: ExperimentConfig):
         all_stations,
         key=lambda b: dijkstra_distances.get(b.network_switch, float('inf'))
     )
-    _partitions = partition_cifar10(len(_sorted_stations))
+    _partitions = partition_cifar10(len(_sorted_stations), seed=cfg.seed)
     _client_profiles = build_client_profiles(_partitions, cfg)
     print(f"  [FL] {len(_sorted_stations)} clientes particionados "
           f"(Non-IID, seed={cfg.seed})")
@@ -1432,13 +1968,12 @@ def client_fn(context: Context) -> fl.client.Client:
     bs      = _sorted_stations[idx]
     partition = _partitions[idx]
 
-    cfg_batch = active_config.batch_size if active_config else 32
+    cfg = active_config if active_config else ExperimentConfig()
+    profile = _client_profiles[idx]
     client = CifarFederatedClient(
         cid=idx, base_station=bs,
-        partition=partition, testset=_cifar_testset
-    )
-    client.trainloader = DataLoader(
-        partition, batch_size=cfg_batch, shuffle=True, num_workers=0
+        partition=partition, batch_size=cfg.batch_size,
+        label_entropy=profile.entropy, seed=cfg.seed + idx * 1009,
     )
     return client.to_client()
 
@@ -1449,23 +1984,69 @@ def client_fn(context: Context) -> fl.client.Client:
 
 def run_federated_training_image(status_callback=None):
     global global_image_model, fl_model_ready, fl_training_status
-    global fl_history, fl_clients, fl_round_log
+    global fl_history, fl_round_log, active_config
+    global _agno_policy, _agno_run_id, _agent_selection_history
 
     cfg = active_config if active_config is not None else ExperimentConfig(
         n_clients=NUM_CLIENTS_FL,
         n_rounds=NUM_ROUNDS_FL,
         weight_mode="random",
     )
+    active_config = cfg
+    fl_model_ready = False
+    fl_history = None
+    _agno_policy = None
+    fl_round_log = []
+    _agent_selection_history = {}
     random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg.seed)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    global_image_model = CifarCNN()
 
-    def _cb(msg):
+    def _cb(message: str) -> None:
         global fl_training_status
-        fl_training_status = msg
+        fl_training_status = message
         if status_callback:
-            status_callback(msg)
+            status_callback(message)
 
+    recorder: Optional[RunArtifactRecorder] = None
+    strategy: Optional[TopologyAwareFedAvg] = None
+    run_history: Optional[FLHistory] = None
     try:
-        fl_round_log = []
+        _agno_run_id = f"fl-{uuid4().hex}"
+        recorder = RunArtifactRecorder(
+            Path(RESULTS_DIR) / "runs",
+            _agno_run_id,
+            asdict(cfg),
+        )
+        configured_audit = Path(cfg.agent_audit_file)
+        audit_path = (
+            configured_audit
+            if configured_audit.is_absolute()
+            else recorder.run_dir / configured_audit.name
+        )
+        replay_path = Path(cfg.agent_replay_file) if cfg.agent_replay_file else None
+        if replay_path is not None and not replay_path.is_absolute():
+            replay_path = Path(_SCRIPT_DIR) / replay_path
+        effective_config = asdict(cfg)
+        effective_config["agent_audit_file"] = str(audit_path)
+        effective_config["agent_replay_file"] = str(replay_path) if replay_path else ""
+        recorder.write_effective_config(effective_config)
+        _agno_policy = AgnoRoundPolicy(
+            mode=cfg.agent_policy_mode,
+            model_id=cfg.agent_model_id,
+            audit_path=str(audit_path),
+            timeout_s=cfg.agent_timeout_s,
+            seed=cfg.seed,
+            replay_path=str(replay_path) if replay_path else None,
+        )
+        print(f"  [Agno] modo={cfg.agent_policy_mode.upper()} | "
+              f"modelo={cfg.agent_model_id} | run_id={_agno_run_id}")
         try:
             window.after(0, _gui_clear_round_list)
         except Exception:
@@ -1479,25 +2060,25 @@ def run_federated_training_image(status_callback=None):
 
         _cb("Particionando dataset...")
         _prepare_fl_state(cfg)
-
-        n_total   = len(_sorted_stations)
+        n_total = len(_sorted_stations)
         n_clients = min(cfg.n_clients, n_total)
 
         print("\n" + "=" * 64)
-        print("  APRENDIZADO FEDERADO - CIFAR-10 (Flower Native)")
+        print("  APRENDIZADO FEDERADO - CIFAR-10 (Flower Strategy)")
         print(f"  Strategy      : TopologyAwareFedAvg")
         print(f"  Modo delays   : {cfg.weight_mode.upper()}")
         print(f"  Clientes/round: {n_clients}  (pool={n_total})")
         print(f"  Rounds        : {cfg.n_rounds}")
-        if cfg.high_latency_periodicity > 0:
-            print(f"  Alta-lat.     : a cada {cfg.high_latency_periodicity} rounds "
-                  f"({int(cfg.high_latency_fraction*100)}% HL)")
-        print("  PRIVACIDADE   : apenas pesos trafegam")
+        print(f"  Selecao       : {cfg.selection_mode}")
+        print(f"  Politica tardia: {cfg.late_update_policy}")
+        print(f"  Resultados    : {recorder.run_dir}")
+        print("  PRIVACIDADE   : apenas pesos e metricas agregadas trafegam")
         print("=" * 64)
 
         history = FLHistory(num_rounds=cfg.n_rounds, num_clients=n_clients)
+        run_history = history
 
-        def _gui_round_callback(round_num: int, entry: Dict):
+        def _gui_round_callback(round_num: int, entry: Dict) -> None:
             try:
                 window.after(0, _gui_append_round, entry)
             except Exception:
@@ -1509,334 +2090,70 @@ def run_federated_training_image(status_callback=None):
             fl_history=history,
             gui_callback=_gui_round_callback,
             status_callback=_cb,
+            recorder=recorder,
             initial_parameters=ndarrays_to_parameters(get_weights(global_image_model)),
         )
+        if not _HAS_RUN_SIMULATION:
+            raise RuntimeError(
+                "Flower run_simulation nao esta disponivel. Execute uv sync "
+                "para instalar flwr[simulation] e Ray."
+            )
 
         client_app = ClientApp(client_fn=client_fn)
         server_app = ServerApp(
             config=ServerConfig(num_rounds=cfg.n_rounds),
             strategy=strategy,
         )
-
-        _cb(f"Iniciando simulacao ({cfg.n_rounds} rounds, {n_clients} clientes/round)...")
-
-        # A fila de atualizacoes adiadas exige o relogio virtual do loop manual.
-        _use_ray = _HAS_RUN_SIMULATION and cfg.late_update_policy != "defer"
-        if _use_ray:
-            try:
-                _flwr_run_simulation(
-                    server_app=server_app,
-                    client_app=client_app,
-                    num_supernodes=n_total,
-                    backend_config={"client_resources": {"num_cpus": 1, "num_gpus": 0.0}},
-                )
-            except SystemExit as se:
-                # Exit Code 701 = Ray/simulation extras ausentes
-                print(f"\n  [AVISO] run_simulation falhou (exit={se.code}). "
-                      "Usando loop manual como fallback.")
-                _use_ray = False
-            except Exception as ray_err:
-                print(f"\n  [AVISO] run_simulation falhou: {ray_err}. "
-                      "Usando loop manual como fallback.")
-                _use_ray = False
-
-        if not _use_ray:
-            # ── Fallback: loop manual compativel com Strategy ──────────────
-            # Usa os mesmos metodos da TopologyAwareFedAvg, sem Ray.
-            print("  [Modo fallback] Simulacao manual sem Ray\n")
-            _cb(f"Simulacao manual ({cfg.n_rounds} rounds)...")
-
-            # Cria clientes antecipadamente (um por estacao)
-            _manual_clients = [
-                CifarFederatedClient(
-                    cid=i, base_station=_sorted_stations[i],
-                    partition=_partitions[i], testset=_cifar_testset
-                )
-                for i in range(n_total)
-            ]
-            for c in _manual_clients:
-                c.trainloader = DataLoader(
-                    _partitions[c.cid], batch_size=cfg.batch_size,
-                    shuffle=True, num_workers=0
-                )
-
-            current_params = ndarrays_to_parameters(get_weights(global_image_model))
-            pending_updates: List[PendingUpdate] = []
-            model_version = 0
-
-            # Reconstroi distancias base para ordenar estacoes
-            strategy._round_dijkstra = dijkstra_distances.copy()
-            station_to_idx = {bs.id: i for i, bs in enumerate(_sorted_stations)}
-
-            for rnd in range(1, cfg.n_rounds + 1):
-                # configure_fit manual (reutiliza logica de selecao da Strategy)
-                strategy._round_dijkstra = _build_round_dijkstra(cfg)
-                selected_stns, is_hl = _select_clients_for_round(
-                    rnd, cfg, _sorted_stations, strategy._round_dijkstra
-                )
-                strategy._last_is_hl            = is_hl
-                strategy._last_selected_indices = [station_to_idx[bs.id]
-                                                   for bs in selected_stns]
-
-                if strategy.status_callback:
-                    strategy.status_callback(
-                        f"Round {rnd}/{cfg.n_rounds} [{cfg.weight_mode}]..."
-                    )
-
-                # Tamanho do modelo
-                model_size_mb = get_model_size_mb(global_image_model)
-
-                # Estima tempos de comunicacao e computacao
-                tentative_timings: Dict[int, ClientTimingResult] = {}
-                for idx in strategy._last_selected_indices:
-                    bs = _sorted_stations[idx]
-                    n_samp = len(_partitions[idx])
-                    t_res = compute_client_timing(
-                        client_station=bs,
-                        cid=idx,
-                        n_samples=n_samp,
-                        epochs=cfg.local_epochs,
-                        model_size_mb=model_size_mb,
-                        cfg=cfg,
-                        round_deadline=0.0,
-                        round_start_time=strategy._virtual_time,
-                        accumulated_staleness=strategy._client_staleness.get(idx, 0)
-                    )
-                    tentative_timings[idx] = t_res
-
-                times_list = [t.t_total for t in tentative_timings.values()]
-                if cfg.deadline_mode == "fixed":
-                    round_deadline = cfg.round_deadline
-                else:
-                    round_deadline = float(np.percentile(times_list, cfg.deadline_percentile)) if times_list else 10.0
-                round_deadline = round(round_deadline, 3)
-
-                client_timings: Dict[int, ClientTimingResult] = {}
-                for idx, t_res in tentative_timings.items():
-                    t_res.deadline = round_deadline
-                    t_res.on_time  = (t_res.t_total <= round_deadline)
-                    if t_res.on_time:
-                        t_res.staleness = strategy._client_staleness.get(idx, 0)
-                    else:
-                        t_res.staleness = strategy._client_staleness.get(idx, 0) + 1
-                    client_timings[idx] = t_res
-
-                hl_tag = "  HL" if is_hl else ""
-                print(f"\n  -- Round {rnd}/{cfg.n_rounds} [{cfg.weight_mode}]{hl_tag} --")
-                if times_list:
-                    print(f"  Deadline do round: {round_deadline:.2f}s | "
-                          f"Tempos estimados: min={min(times_list):.2f}s, med={np.mean(times_list):.2f}s, max={max(times_list):.2f}s")
-
-                # Treino local em cada cliente selecionado
-                fit_results: List[Tuple] = []
-                weights_list = parameters_to_ndarrays(current_params)
-                for idx in strategy._last_selected_indices:
-                    cli = _manual_clients[idx]
-                    w, n_samples, m = cli.fit(weights_list,
-                                              {"local_epochs": cfg.local_epochs})
-                    fit_results.append((idx, w, n_samples, m))
-
-                # Atualizacoes adiadas que ja chegaram antes deste deadline.
-                # tau e calculado pela diferenca real entre versao atual e versao-base.
-                eff_fit_results = []
-                clients_detail = []
-                round_end_time = strategy._virtual_time + round_deadline
-                remaining_pending: List[PendingUpdate] = []
-                for update in pending_updates:
-                    tau = model_version - update.base_version
-                    if tau > cfg.max_staleness:
-                        print(f"    [ATRASADA DESCARTADA] C{update.cid:02d} tau={tau} > max={cfg.max_staleness}")
-                        continue
-                    if update.arrival_time <= round_end_time:
-                        eff_w = float(update.n_samples)
-                        if cfg.enable_staleness:
-                            eff_w /= (1.0 + tau) ** cfg.staleness_gamma
-                        eff_fit_results.append((update.cid, update.payload, update.n_samples, update.metrics, eff_w))
-                        clients_detail.append({
-                            "cid": update.cid, "bs_id": _sorted_stations[update.cid].id,
-                            "loss": float(update.metrics.get("train_loss", 0.0)),
-                            "acc": float(update.metrics.get("train_acc", 0.0)),
-                            "t_total": 0.0, "arrival_time": update.arrival_time,
-                            "deadline": round_deadline, "on_time": False, "staleness": tau,
-                            "status": "deferred_accepted", "entropy": float(update.metrics.get("entropy", 0.0)),
-                            "update_norm": float(update.metrics.get("update_norm", 0.0)),
-                        })
-                    else:
-                        remaining_pending.append(update)
-                pending_updates = remaining_pending
-                for idx, w, n, m in fit_results:
-                    timing = client_timings[idx]
-                    profile = _client_profiles.get(idx)
-                    # Atualizacoes da rodada iniciam na versao atual; uma atrasada
-                    # so recebe tau quando for efetivamente agregada numa versao futura.
-                    timing.staleness = 0
-                    status = "on_time"
-                    if not timing.on_time:
-                        if cfg.late_update_policy == "discard":
-                            print(f"    [STRAGGLER DESCARTADO] C{idx:02d}|BS{_sorted_stations[idx].id} "
-                                  f"t={timing.t_total:.2f}s > deadline={round_deadline:.2f}s")
-                            continue
-                        if cfg.late_update_policy == "defer":
-                            pending_updates.append(PendingUpdate(
-                                cid=idx, base_version=model_version, arrival_time=timing.arrival_time,
-                                payload=w, n_samples=n, metrics=m))
-                            clients_detail.append({
-                                "cid": idx, "bs_id": _sorted_stations[idx].id,
-                                "loss": float(m["train_loss"]), "acc": float(m["train_acc"]),
-                                "t_total": timing.t_total, "arrival_time": timing.arrival_time,
-                                "deadline": round_deadline, "on_time": False, "staleness": 0,
-                                "status": "deferred", "entropy": float(m.get("entropy", 0.0)),
-                                "js_divergence": profile.js_divergence if profile else 0.0,
-                                "rare_coverage": profile.rare_coverage if profile else 0.0,
-                                "update_norm": float(m.get("update_norm", 0.0)),
-                            })
-                            continue
-                        # Peso reduzido no proprio round: politica explicita, tau efetivo=1.
-                        timing.staleness = 1
-                        status = "reduced_weight"
-
-                    eff_w = float(n)
-                    if cfg.enable_staleness and timing.staleness > 0:
-                        eff_w /= (1.0 + timing.staleness) ** cfg.staleness_gamma
-                    eff_fit_results.append((idx, w, n, m, eff_w))
-
-                    clients_detail.append({
-                        "cid":          idx,
-                        "bs_id":        _sorted_stations[idx].id,
-                        "dist_ms":      timing.latency_ms,
-                        "loss":         float(m["train_loss"]),
-                        "acc":          float(m["train_acc"]),
-                        "t_down":       timing.t_down,
-                        "t_comp":       timing.t_comp,
-                        "t_up":         timing.t_up,
-                        "t_total":      timing.t_total,
-                        "arrival_time": timing.arrival_time,
-                        "deadline":     round_deadline,
-                        "on_time":      timing.on_time,
-                        "staleness":    timing.staleness,
-                        "bandwidth":    timing.bandwidth_mbps,
-                        "update_norm":  float(m.get("update_norm", 0.0)),
-                        "entropy":      float(m.get("entropy", 0.0)),
-                    })
-
-                if not eff_fit_results:
-                    print("  [AVISO] Todos os clientes perderam o deadline. Mantendo pesos atuais.")
-                    continue
-
-                # FedAvg ponderado por staleness
-                total_eff_weight = sum(ew for _, _, _, _, ew in eff_fit_results)
-                agg_weights = [
-                    sum(w[i] * (ew / total_eff_weight)
-                        for _, w, _, _, ew in eff_fit_results)
-                    for i in range(len(eff_fit_results[0][1]))
-                ]
-                current_params = ndarrays_to_parameters(agg_weights)
-                strategy._last_aggregated_params = current_params
-                model_version += 1
-
-                # Metricas de treino agregadas
-                total_samples  = sum(n for _, _, n, _, _ in eff_fit_results)
-                agg_train_loss = sum(m["train_loss"] * ew for _, _, _, m, ew in eff_fit_results) / total_eff_weight
-                agg_train_acc  = sum(m["train_acc"]  * ew for _, _, _, m, ew in eff_fit_results) / total_eff_weight
-                agg_up_norm    = sum(m.get("update_norm", 0.0) * ew for _, _, _, m, ew in eff_fit_results) / total_eff_weight
-
-                on_time_count = sum(1 for c in clients_detail if c["on_time"])
-                late_count    = sum(1 for c in clients_detail if not c["on_time"])
-                times = [c["t_total"] for c in clients_detail]
-                min_time = min(times) if times else 0.0
-                max_time = max(times) if times else 0.0
-                avg_time = float(np.mean(times)) if times else 0.0
-
-                strategy._last_fit_metrics = {
-                    "n_clients":       len(clients_detail),
-                    "total_samples":   total_samples,
-                    "train_loss":      agg_train_loss,
-                    "train_acc":       agg_train_acc,
-                    "update_norm":     agg_up_norm,
-                    "deadline":        round_deadline,
-                    "clients_on_time": on_time_count,
-                    "clients_late":    late_count,
-                    "min_time":        min_time,
-                    "max_time":        max_time,
-                    "avg_time":        avg_time,
-                    "clients_detail":  clients_detail,
-                }
-                history.add_fit_metrics(rnd, {
-                    "train_loss":  agg_train_loss,
-                    "train_acc":   agg_train_acc,
-                    "update_norm": agg_up_norm,
-                })
-
-                step_time = max_time if (max_time <= round_deadline) else round_deadline
-                strategy._virtual_time += step_time
-
-                print(f"  Servidor: FedAvg -> {len(eff_fit_results)} clientes ({total_samples} amostras) | "
-                      f"Deadline: {round_deadline:.2f}s | No prazo: {on_time_count}/{len(clients_detail)} | "
-                      f"||Δw||={agg_up_norm:.3f}")
-
-                # Avaliacao local em cada cliente selecionado
-                eval_results: List[Tuple] = []
-                for idx in strategy._last_selected_indices:
-                    cli = _manual_clients[idx]
-                    loss_e, n_e, m_e = cli.evaluate(agg_weights, {})
-                    eval_results.append((idx, loss_e, n_e, m_e))
-
-                total_eval = sum(n for _, _, n, _ in eval_results)
-                val_loss = sum(l * n for _, l, n, _ in eval_results) / total_eval
-                val_acc  = sum(m["accuracy"] * n for _, _, n, m in eval_results) / total_eval
-                acc_pct  = val_acc * 100
-                print(f"  Round {rnd} - Loss: {val_loss:.4f} | Ac.: {acc_pct:.2f}%")
-
-                history.losses_distributed.append((rnd, val_loss))
-                history.add_eval_metrics(rnd, {"accuracy": val_acc})
-
-                round_entry = {
-                    "round":           rnd,
-                    "n_clients":       len(clients_detail),
-                    "weight_mode":     cfg.weight_mode,
-                    "is_hl_round":     is_hl,
-                    "total_samples":   total_samples,
-                    "train_loss":      agg_train_loss,
-                    "train_acc":       agg_train_acc,
-                    "update_norm":     agg_up_norm,
-                    "deadline":        round_deadline,
-                    "clients_on_time": on_time_count,
-                    "clients_late":    late_count,
-                    "min_time":        min_time,
-                    "max_time":        max_time,
-                    "avg_time":        avg_time,
-                    "val_loss":        val_loss,
-                    "val_acc":         val_acc,
-                    "clients_detail":  clients_detail,
-                }
-                fl_round_log.append(round_entry)
-                _gui_round_callback(rnd, round_entry)
-            # ── fim do loop manual ─────────────────────────────────────────
+        _cb(f"Iniciando Flower ({cfg.n_rounds} rounds, {n_clients} clientes/round)...")
+        _flwr_run_simulation(
+            server_app=server_app,
+            client_app=client_app,
+            num_supernodes=n_total,
+            backend_config={"client_resources": {"num_cpus": 1, "num_gpus": 0.0}},
+        )
+        strategy.finalize()
 
         if strategy._last_aggregated_params is not None:
-            final_weights = parameters_to_ndarrays(strategy._last_aggregated_params)
-            set_weights(global_image_model, final_weights)
-
-        fl_history     = history
+            set_weights(
+                global_image_model,
+                parameters_to_ndarrays(strategy._last_aggregated_params),
+            )
+        fl_history = history
         fl_model_ready = True
         _cb("Modelo pronto")
+        recorder.finish({
+            "status": "completed",
+            "n_rounds_completed": len(history.losses_distributed),
+            "final_summary": history.summary(),
+        })
 
         print("\n" + "=" * 64)
         print("  FL com imagens concluido!")
         print(history.summary())
+        print(f"  Artefatos salvos em: {recorder.run_dir}")
         print("=" * 64 + "\n")
-
         try:
             window.after(0, refresh_map)
         except Exception:
             pass
-
-    except Exception as e:
-        _cb(f"Erro: {str(e)[:50]}")
-        print(f"\nErro no treinamento FL: {e}")
+    except Exception as exc:
+        if strategy is not None:
+            try:
+                strategy.finalize()
+            except Exception:
+                pass
+        if recorder is not None:
+            recorder.finish({
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+                "n_rounds_completed": (
+                    len(run_history.losses_distributed) if run_history is not None else 0
+                ),
+            })
+        _cb(f"Erro: {str(exc)[:120]}")
+        print(f"\nErro no treinamento FL: {exc}")
         import traceback
         traceback.print_exc()
-
 
 
 # ==============================================================================
@@ -2276,7 +2593,7 @@ def draw_network_map(highlight_bs: Optional[BaseStation] = None,
                             fontsize=6, color='white', fontweight='bold')
 
     ax_map.set_title(
-        "Rede Hexagonal 5x5 - SimulatorFederatedLearning\n"
+        "Rede Hexagonal 5x5 - SimulatorFederatedLearning com CIFAR-10\n"
         f"Servidor Central: BS{CENTRAL_BS.id} | "
         f"Clientes: {len(client_stations)} | "
         f"Strategy: TopologyAwareFedAvg",
@@ -2376,15 +2693,31 @@ def _show_round_details(idx: int):
     for cd in e.get("clients_detail", []):
         cid     = cd["cid"]
         bs_id   = cd["bs_id"]
-        t_tot   = cd.get("t_total", 0.0)
-        on_tm   = cd.get("on_time", True)
+        t_tot   = cd.get("t_total")
+        on_tm   = cd.get("on_time")
         tau     = cd.get("staleness", 0)
-        c_loss  = cd["loss"]
-        u_norm  = cd.get("update_norm", 0.0)
-        st_tag  = "OK" if on_tm else f"LATE(τ={tau})"
+        c_loss  = cd.get("loss")
+        u_norm  = cd.get("update_norm")
+        status  = cd.get("status")
+        status_labels = {
+            "on_time": "OK",
+            "late_pending": "PENDENTE",
+            "accepted_stale": f"STALE(tau={tau})",
+            "accepted_reduced": "PESO REDUZIDO",
+            "discarded_deadline": "DESCARTADO (prazo)",
+            "discarded_staleness": f"DESCARTADO (tau={tau})",
+            "failed": "FALHOU",
+        }
+        st_tag = status_labels.get(
+            status,
+            "LATE" if on_tm is False else "OK" if on_tm is True else "DESCONHECIDO",
+        )
+        time_label = f"{float(t_tot):4.1f}s" if t_tot is not None else "   -- "
+        norm_label = f"{float(u_norm):4.2f}" if u_norm is not None else "  --"
+        loss_label = f"{float(c_loss):4.2f}" if c_loss is not None else "  --"
         lines.append(
-            f"  [C{cid:02d}|BS{bs_id:<2}] t={t_tot:4.1f}s [{st_tag}]"
-            f" ||Δw||={u_norm:4.2f} L={c_loss:4.2f}"
+            f"  [C{cid:02d}|BS{bs_id:<2}] t={time_label} [{st_tag}]"
+            f" ||dw||={norm_label} L={loss_label}"
         )
 
     lines.append(f"+{sep}+")

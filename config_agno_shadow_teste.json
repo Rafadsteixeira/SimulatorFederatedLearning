@@ -1,0 +1,23 @@
+{
+  "n_clients": 2,
+  "n_rounds": 1,
+  "weight_mode": "random",
+  "seed": 42,
+  "local_epochs": 1,
+  "batch_size": 32,
+  "deadline_mode": "percentile",
+  "deadline_percentile": 80.0,
+  "comp_time_per_sample": 0.005,
+  "time_jitter_fraction": 0.0,
+  "selection_mode": "multi_objective",
+  "late_update_policy": "defer",
+  "late_update_weight_factor": 0.5,
+  "max_staleness": 2,
+  "enable_staleness": true,
+  "staleness_gamma": 0.5,
+  "agent_policy_mode": "shadow",
+  "agent_model_id": "openai/gpt-oss-120b",
+  "agent_timeout_s": 20.0,
+  "agent_audit_file": "decisions.jsonl",
+  "agent_replay_file": ""
+}

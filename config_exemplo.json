@@ -20,7 +20,13 @@
   "selection_time_weight": 0.15,
   "rare_class_threshold": 0.08,
   "late_update_policy": "defer",
+  "late_update_weight_factor": 0.5,
   "max_staleness": 2,
   "enable_staleness": true,
-  "staleness_gamma": 0.5
+  "staleness_gamma": 0.5,
+  "agent_policy_mode": "shadow",
+  "agent_model_id": "openai/gpt-oss-120b",
+  "agent_timeout_s": 20.0,
+  "agent_audit_file": "decisions.jsonl",
+  "agent_replay_file": ""
 }
