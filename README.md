@@ -2,17 +2,13 @@
 
 Simulador experimental de aprendizado federado em uma topologia Edge Computing, com CIFAR-10, Flower e uma política Agno opcional.
 
+**Autores:** Rafael de Souza Teixeira (Mestrando) / Orientador: Dr. Paulo Silas Servero<br>
+**Versão:** 3.0.0 · **Linguagem:** Python 3.12 a 3.14<br>
+**Repositório:** [Rafadsteixeira/SimulatorFederatedLearning](https://github.com/Rafadsteixeira/SimulatorFederatedLearning)
+
 ## Pergunta de pesquisa
 
-<<<<<<< HEAD
-Sob quais condições a participação de clientes lentos, mas com dados informativos, melhora a qualidade do modelo o suficiente para compensar a latência adicional?
-=======
-**Autores:** Rafael de Souza Teixeira (Mestrando) / Orientador: Dr. Paulo Silas Servero<br>
-**Versão:** 3.0.0 · **Linguagem:** Python 3.10+<br>
-**Repositório:** [Rafadsteixeira/SimulatorFederatedLearning](https://github.com/Rafadsteixeira/SimulatorFederatedLearning)<br><br>
-**Research Questions** - Sob quais condições a inclusão de clientes lentos, porém com dados informativos, compensa o custo adicional de latência no processo de treinamento distribuído em dispositivos móveis?
----
->>>>>>> e87f4a0b639dde1814f8f804275b933f5fe73bb6
+Sob quais condições a inclusão de clientes lentos, porém com dados informativos, compensa o custo adicional de latência no processo de treinamento distribuído em dispositivos móveis?
 
 **Hipótese:** quando os dados de um cliente acrescentam diversidade ou informação útil, aceitar sua atualização com uma regra explícita de deadline e staleness pode melhorar a validação global frente a políticas que escolhem somente por rapidez ou distância.
 

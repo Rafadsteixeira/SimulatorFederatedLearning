@@ -11,4 +11,4 @@ fl_results_v15/*.jsonl
 fl_results_v15/*.db
 fl_results_v15/*.png
 fl_results_v15/runs/
-data_cifar10/*.tar.gz
+data_cifar10/
