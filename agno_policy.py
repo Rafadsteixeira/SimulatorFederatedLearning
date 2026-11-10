@@ -23,6 +23,130 @@ from pydantic import BaseModel, ConfigDict, Field
 Action = Literal["select", "skip", "defer", "accept_stale", "reduce_weight", "discard"]
 
 
+# Regras de protocolo: garantem que a resposta passe na validacao de decide().
+# Nao sao configuraveis porque o simulador depende delas.
+PROTOCOL_INSTRUCTIONS: tuple[str, ...] = (
+    "Voce e uma politica de aprendizado federado. Responda somente pelo schema.",
+    "Nunca invente clientes, metricas ou acoes fora da lista permitida.",
+    "Retorne exatamente uma acao para cada cliente recebido, sem repetir IDs.",
+    "Nao escolha pesos numericos: o simulador calcula pesos e limites.",
+)
+
+# Criterio de decisao padrao; pode ser substituido por AGENT_INSTRUCTIONS.
+DEFAULT_STRATEGY_INSTRUCTIONS = (
+    "Priorize qualidade de validacao, deadline, diversidade de dados e equidade."
+)
+
+# Variavel de credencial verificada antes de criar o agente, por provedor.
+PROVIDER_CREDENTIAL_ENV: Dict[str, tuple[str, ...]] = {
+    "groq": ("GROQ_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+}
+
+_TRUE_VALUES = {"1", "true", "yes", "on", "sim"}
+_FALSE_VALUES = {"0", "false", "no", "off", "nao", ""}
+
+
+def _env_bool(env: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = env.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    raise ValueError(f"{name} deve ser true/false, recebido: {raw!r}")
+
+
+def _env_str(env: Mapping[str, str], name: str, default: str) -> str:
+    value = (env.get(name) or "").strip()
+    return value or default
+
+
+@dataclass(frozen=True)
+class AgentSettings:
+    """Atributos usados na criacao do agente Agno.
+
+    Valores definidos no ambiente (ou no .env) tem precedencia sobre os
+    valores recebidos do arquivo de configuracao do experimento.
+    """
+
+    provider: str
+    model_id: str
+    name: str = "fl-round-policy"
+    strategy_instructions: str = DEFAULT_STRATEGY_INSTRUCTIONS
+    debug_mode: bool = False
+    debug_level: int = 1
+    markdown: bool = False
+    use_json_mode: bool = True
+
+    @property
+    def formatted_model(self) -> str:
+        return f"{self.provider}:{self.model_id}"
+
+    @property
+    def instructions(self) -> List[str]:
+        return [*PROTOCOL_INSTRUCTIONS, self.strategy_instructions]
+
+    @classmethod
+    def from_env(cls, default_provider: str, default_model_id: str,
+                 env: Optional[Mapping[str, str]] = None) -> "AgentSettings":
+        env = os.environ if env is None else env
+        provider = _env_str(env, "AGENT_PROVIDER", default_provider).lower()
+        model_id = _env_str(env, "AGENT_MODEL_ID", default_model_id)
+        if not provider:
+            raise ValueError("AGENT_PROVIDER/agent_provider nao pode ser vazio")
+        if not model_id:
+            raise ValueError("AGENT_MODEL_ID/agent_model_id nao pode ser vazio")
+        debug_level_raw = _env_str(env, "AGENT_DEBUG_LEVEL", "1")
+        if debug_level_raw not in {"1", "2"}:
+            raise ValueError(f"AGENT_DEBUG_LEVEL deve ser 1 ou 2, recebido: {debug_level_raw!r}")
+        return cls(
+            provider=provider,
+            model_id=model_id,
+            name=_env_str(env, "AGENT_NAME", cls.name),
+            strategy_instructions=_env_str(
+                env, "AGENT_INSTRUCTIONS", DEFAULT_STRATEGY_INSTRUCTIONS
+            ),
+            debug_mode=_env_bool(env, "AGENT_DEBUG", False),
+            debug_level=int(debug_level_raw),
+            markdown=_env_bool(env, "AGENT_MARKDOWN", False),
+            use_json_mode=_env_bool(env, "AGENT_USE_JSON_MODE", True),
+        )
+
+
+def build_agent_model(settings: AgentSettings, timeout_s: float, seed: int):
+    """Cria o modelo Agno a partir de ``provider:model_id`` e aplica ajustes por provedor."""
+    try:
+        from agno.models.utils import get_model
+        model = get_model(settings.formatted_model)
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Pacote do provedor {settings.provider!r} nao instalado. "
+            "Execute uv sync para instalar as dependencias."
+        ) from exc
+
+    if settings.provider == "groq":
+        # Groq aceita amostragem deterministica com seed.
+        model.temperature = 0
+        model.seed = seed
+        model.timeout = max(1, int(timeout_s))
+        model.max_retries = 2
+    elif settings.provider == "anthropic":
+        # Modelos Claude atuais rejeitam temperature/top_p/top_k e nao tem seed;
+        # a reprodutibilidade das decisoes vem do modo replay.
+        model.timeout = float(timeout_s)
+        model.max_tokens = 16000
+        model.client_params = {**(model.client_params or {}), "max_retries": 2}
+    else:
+        if hasattr(model, "timeout"):
+            model.timeout = timeout_s
+        if hasattr(model, "max_retries"):
+            model.max_retries = 2
+    return model
+
+
 class ClientAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -61,7 +185,9 @@ class AgnoRoundPolicy:
 
     def __init__(self, mode: str, model_id: str, audit_path: str,
                  timeout_s: float = 20.0, seed: int = 42,
-                 replay_path: Optional[str] = None) -> None:
+                 replay_path: Optional[str] = None,
+                 provider: str = "groq",
+                 settings: Optional[AgentSettings] = None) -> None:
         if mode not in self.VALID_MODES:
             raise ValueError(
                 f"mode deve ser um de {sorted(self.VALID_MODES)}, recebido: {mode!r}"
@@ -69,8 +195,13 @@ class AgnoRoundPolicy:
         if timeout_s <= 0:
             raise ValueError("timeout_s deve ser maior que zero")
 
+        # A chave permanece no arquivo local e nunca e incorporada ao prompt/log.
+        load_dotenv(Path(__file__).with_name(".env"))
+        self.settings = settings or AgentSettings.from_env(provider, model_id)
+
         self.mode = mode
-        self.model_id = model_id
+        self.provider = self.settings.provider
+        self.model_id = self.settings.model_id
         self.timeout_s = timeout_s
         self.seed = seed
         self.audit_path = Path(audit_path)
@@ -89,40 +220,28 @@ class AgnoRoundPolicy:
         self._agent = None
         self._previous_event_hash: Optional[str] = None
 
-        # A chave permanece no arquivo local e nunca e incorporada ao prompt/log.
-        load_dotenv(Path(__file__).with_name(".env"))
-
     def _get_agent(self):
         if self._agent is not None:
             return self._agent
         try:
             from agno.agent import Agent
-            from agno.models.groq import Groq
         except ImportError as exc:
-            raise RuntimeError("Agno/Groq nao instalado. Execute uv sync para instalar as dependencias.") from exc
-        if not os.getenv("GROQ_API_KEY"):
+            raise RuntimeError("Agno nao instalado. Execute uv sync para instalar as dependencias.") from exc
+        settings = self.settings
+        credential_vars = PROVIDER_CREDENTIAL_ENV.get(settings.provider, ())
+        if credential_vars and not any(os.getenv(name) for name in credential_vars):
             raise RuntimeError(
-                "GROQ_API_KEY nao configurada no ambiente ou no arquivo .env"
+                f"{' ou '.join(credential_vars)} nao configurada no ambiente ou no arquivo .env"
             )
         self._agent = Agent(
-            name="fl-round-policy",
-            model=Groq(
-                id=self.model_id,
-                temperature=0,
-                timeout=max(1, int(self.timeout_s)),
-                max_retries=2,
-                seed=self.seed,
-            ),
+            name=settings.name,
+            model=build_agent_model(settings, self.timeout_s, self.seed),
             output_schema=RoundDecision,
-            use_json_mode=True,
-            instructions=[
-                "Voce e uma politica de aprendizado federado. Responda somente pelo schema.",
-                "Nunca invente clientes, metricas ou acoes fora da lista permitida.",
-                "Retorne exatamente uma acao para cada cliente recebido, sem repetir IDs.",
-                "Nao escolha pesos numericos: o simulador calcula pesos e limites.",
-                "Priorize qualidade de validacao, deadline, diversidade de dados e equidade.",
-            ],
-            markdown=False,
+            use_json_mode=settings.use_json_mode,
+            instructions=settings.instructions,
+            markdown=settings.markdown,
+            debug_mode=settings.debug_mode,
+            debug_level=settings.debug_level,
             retries=1,
         )
         return self._agent
@@ -318,7 +437,10 @@ class AgnoRoundPolicy:
         )
         self._audit({
             "run_id": context.get("run_id"), "round": context.get("round"),
-            "phase": phase, "mode": self.mode, "model_id": self.model_id,
+            "phase": phase, "mode": self.mode,
+            "provider": self.provider, "model_id": self.model_id,
+            "agent_name": self.settings.name,
+            "agent_strategy_instructions": self.settings.strategy_instructions,
             "seed": self.seed, "agno_run_id": agno_run_id,
             "elapsed_ms": elapsed_ms,
             "context": context, "fallback": fallback_dict,

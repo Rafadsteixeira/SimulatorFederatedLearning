@@ -74,7 +74,7 @@ Para rodar os testes:
 uv run pytest
 ~~~
 
-Dependências não são instaladas automaticamente durante a inicialização. O CIFAR-10 é baixado quando o conjunto é carregado pela aplicação. Para usar Agno com Groq, copie .env.example para .env e preencha GROQ_API_KEY localmente. O modo baseline não exige chamada ao LLM.
+Dependências não são instaladas automaticamente durante a inicialização. O CIFAR-10 é baixado quando o conjunto é carregado pela aplicação. Para usar o Agno, copie .env.example para .env e preencha a chave do provedor escolhido (GROQ_API_KEY ou ANTHROPIC_API_KEY). O modo baseline não exige chamada ao LLM.
 
 ## Configuração
 
@@ -94,6 +94,22 @@ Use config_exemplo.json como base. Os principais campos são:
 | max_staleness | 2 | Limite de versões para aceitar uma atualização pendente |
 | agent_policy_mode | baseline, shadow, active, replay | Política Agno e modo de auditoria |
 | agent_replay_file | vazio ou caminho JSONL | Decisões de origem para replay |
+
+### Criação do agente Agno
+
+O modelo é criado a partir da string `<provedor>:<modelo>` (por exemplo, `groq:openai/gpt-oss-120b` ou `anthropic:claude-opus-5-5`). Os atributos do agente vêm do ambiente ou do `.env`. AGENT_PROVIDER e AGENT_MODEL_ID, quando definidos, têm precedência sobre `agent_provider` e `agent_model_id` do JSON. Os valores efetivos ficam registrados em `config.json` e em cada evento de `decisions.jsonl`.
+
+| Variável | Padrão | Uso |
+|---|---|---|
+| AGENT_PROVIDER | agent_provider do JSON (groq) | Provedor Agno: groq, anthropic etc. |
+| AGENT_MODEL_ID | agent_model_id do JSON | Modelo do provedor |
+| AGENT_NAME | fl-round-policy | Nome do agente |
+| AGENT_INSTRUCTIONS | critério padrão | Substitui só o critério de decisão; as regras de protocolo são fixas |
+| AGENT_DEBUG / AGENT_DEBUG_LEVEL | false / 1 | Depuração do Agno |
+| AGENT_MARKDOWN | false | Mantenha false: a resposta precisa ser JSON |
+| AGENT_USE_JSON_MODE | true | false usa saída estruturada nativa quando o modelo suporta |
+
+Com Groq, o agente usa temperature 0 e a seed do experimento. Os modelos Claude atuais não aceitam temperature nem seed; a reprodutibilidade das decisões vem do modo replay.
 
 No modo replay, informe o JSONL de uma execução anterior em agent_replay_file. As decisões são associadas pela fase, rodada e grupo de decisão; qualquer decisão incompatível usa o fallback e registra o erro.
 

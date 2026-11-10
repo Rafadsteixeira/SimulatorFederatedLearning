@@ -15,6 +15,7 @@ def test_json_configs_are_valid_and_have_safe_agno_defaults(filename):
     config = json.loads((PROJECT_DIR / filename).read_text(encoding="utf-8"))
 
     assert config["agent_policy_mode"] == "shadow"
+    assert config["agent_provider"] == "groq"
     assert config["agent_model_id"] == "openai/gpt-oss-120b"
     assert config["agent_timeout_s"] > 0
     assert config["agent_audit_file"].endswith(".jsonl")
@@ -31,4 +32,6 @@ def test_secret_file_is_not_part_of_documented_example():
     example = (PROJECT_DIR / ".env.example").read_text(encoding="utf-8")
 
     assert "GROQ_API_KEY=" in example
+    assert "ANTHROPIC_API_KEY=" in example
     assert "gsk_" not in example
+    assert "sk-ant-" not in example

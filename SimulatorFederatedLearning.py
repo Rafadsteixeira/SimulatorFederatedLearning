@@ -120,6 +120,9 @@ class ExperimentConfig:
     # Politica opcional baseada em LLM/Agno.
     # Em shadow o agente decide e audita, mas o baseline continua sendo aplicado.
     agent_policy_mode:        str   = "shadow"  # baseline, shadow, active ou replay
+    # Provedor e modelo Agno ("provider:model_id"); AGENT_PROVIDER e
+    # AGENT_MODEL_ID no ambiente/.env tem precedencia sobre estes valores.
+    agent_provider:           str   = "groq"
     agent_model_id:           str   = "openai/gpt-oss-120b"
     agent_timeout_s:          float = 20.0
     agent_audit_file:         str   = "decisions.jsonl"
@@ -161,6 +164,7 @@ class ExperimentConfig:
         cfg.rare_class_threshold     = float(data.get('rare_class_threshold', cfg.rare_class_threshold))
         cfg.time_jitter_fraction     = float(data.get('time_jitter_fraction', cfg.time_jitter_fraction))
         cfg.agent_policy_mode        = str(data.get('agent_policy_mode', cfg.agent_policy_mode))
+        cfg.agent_provider           = str(data.get('agent_provider', cfg.agent_provider)).strip().lower()
         cfg.agent_model_id           = str(data.get('agent_model_id', cfg.agent_model_id))
         cfg.agent_timeout_s          = float(data.get('agent_timeout_s', cfg.agent_timeout_s))
         cfg.agent_audit_file         = str(data.get('agent_audit_file', cfg.agent_audit_file))
@@ -214,6 +218,8 @@ class ExperimentConfig:
             raise ValueError(
                 "agent_policy_mode deve ser baseline, shadow, active ou replay"
             )
+        if not cfg.agent_provider.strip():
+            raise ValueError("agent_provider nao pode ser vazio")
         if not cfg.agent_model_id.strip():
             raise ValueError("agent_model_id nao pode ser vazio")
         if not np.isfinite(cfg.agent_timeout_s) or cfg.agent_timeout_s <= 0:
@@ -246,7 +252,7 @@ class ExperimentConfig:
             f"(fator={self.late_update_weight_factor:.2f}, max tau={self.max_staleness})"
         )
         if self.agent_policy_mode != "baseline":
-            lines.append(f"LLM       : {self.agent_model_id}")
+            lines.append(f"LLM       : {self.agent_provider}:{self.agent_model_id}")
         lines.append(f"Seed      : {self.seed}")
         lines.append(f"Epocas loc: {self.local_epochs}")
         lines.append(f"Batch     : {self.batch_size}")
@@ -2033,10 +2039,6 @@ def run_federated_training_image(status_callback=None):
         replay_path = Path(cfg.agent_replay_file) if cfg.agent_replay_file else None
         if replay_path is not None and not replay_path.is_absolute():
             replay_path = Path(_SCRIPT_DIR) / replay_path
-        effective_config = asdict(cfg)
-        effective_config["agent_audit_file"] = str(audit_path)
-        effective_config["agent_replay_file"] = str(replay_path) if replay_path else ""
-        recorder.write_effective_config(effective_config)
         _agno_policy = AgnoRoundPolicy(
             mode=cfg.agent_policy_mode,
             model_id=cfg.agent_model_id,
@@ -2044,9 +2046,21 @@ def run_federated_training_image(status_callback=None):
             timeout_s=cfg.agent_timeout_s,
             seed=cfg.seed,
             replay_path=str(replay_path) if replay_path else None,
+            provider=cfg.agent_provider,
         )
+        # Registra os valores efetivos (apos precedencia do ambiente/.env).
+        agent_settings = _agno_policy.settings
+        effective_config = asdict(cfg)
+        effective_config["agent_audit_file"] = str(audit_path)
+        effective_config["agent_replay_file"] = str(replay_path) if replay_path else ""
+        effective_config["agent_provider"] = agent_settings.provider
+        effective_config["agent_model_id"] = agent_settings.model_id
+        effective_config["agent_name"] = agent_settings.name
+        effective_config["agent_strategy_instructions"] = agent_settings.strategy_instructions
+        effective_config["agent_use_json_mode"] = agent_settings.use_json_mode
+        recorder.write_effective_config(effective_config)
         print(f"  [Agno] modo={cfg.agent_policy_mode.upper()} | "
-              f"modelo={cfg.agent_model_id} | run_id={_agno_run_id}")
+              f"modelo={agent_settings.formatted_model} | run_id={_agno_run_id}")
         try:
             window.after(0, _gui_clear_round_list)
         except Exception:

@@ -196,3 +196,101 @@ def test_replay_reuses_recorded_decision_without_calling_model(artifact_dir):
     )
     assert result.actions == {0: "select", 1: "skip"}
     assert result.source == "replay"
+
+
+# --- Parametrizacao da criacao do agente -----------------------------------
+
+from agno_policy import (  # noqa: E402
+    AgentSettings,
+    DEFAULT_STRATEGY_INSTRUCTIONS,
+    PROTOCOL_INSTRUCTIONS,
+    build_agent_model,
+)
+
+
+def test_settings_use_config_defaults_when_env_is_empty():
+    settings = AgentSettings.from_env("groq", "openai/gpt-oss-120b", env={
+        "AGENT_PROVIDER": "", "AGENT_MODEL_ID": "  ",
+    })
+
+    assert settings.formatted_model == "groq:openai/gpt-oss-120b"
+    assert settings.name == "fl-round-policy"
+    assert settings.debug_mode is False
+    assert settings.debug_level == 1
+    assert settings.markdown is False
+    assert settings.use_json_mode is True
+    assert settings.instructions == [*PROTOCOL_INSTRUCTIONS, DEFAULT_STRATEGY_INSTRUCTIONS]
+
+
+def test_env_overrides_provider_model_and_agent_attributes():
+    settings = AgentSettings.from_env("groq", "openai/gpt-oss-120b", env={
+        "AGENT_PROVIDER": "Anthropic",
+        "AGENT_MODEL_ID": "claude-opus-5-5",
+        "AGENT_NAME": "Politica FL",
+        "AGENT_INSTRUCTIONS": "Favoreca clientes com classes raras.",
+        "AGENT_DEBUG": "true",
+        "AGENT_DEBUG_LEVEL": "2",
+        "AGENT_MARKDOWN": "false",
+        "AGENT_USE_JSON_MODE": "false",
+    })
+
+    assert settings.formatted_model == "anthropic:claude-opus-5-5"
+    assert settings.name == "Politica FL"
+    assert settings.debug_mode is True
+    assert settings.debug_level == 2
+    assert settings.use_json_mode is False
+    # As regras de protocolo continuam presentes; so o criterio muda.
+    assert settings.instructions[:-1] == list(PROTOCOL_INSTRUCTIONS)
+    assert settings.instructions[-1] == "Favoreca clientes com classes raras."
+
+
+@pytest.mark.parametrize("env", [
+    {"AGENT_DEBUG": "talvez"},
+    {"AGENT_DEBUG_LEVEL": "3"},
+])
+def test_invalid_agent_env_values_are_rejected(env):
+    with pytest.raises(ValueError):
+        AgentSettings.from_env("groq", "openai/gpt-oss-120b", env=env)
+
+
+def test_anthropic_model_omits_sampling_params():
+    settings = AgentSettings(provider="anthropic", model_id="claude-opus-5-5")
+    model = build_agent_model(settings, timeout_s=20.0, seed=42)
+
+    assert type(model).__name__ == "Claude"
+    assert model.id == "claude-opus-5-5"
+    assert model.temperature is None
+    assert model.timeout == 20.0
+    assert model.client_params["max_retries"] == 2
+
+
+def test_groq_model_keeps_deterministic_params():
+    settings = AgentSettings(provider="groq", model_id="openai/gpt-oss-120b")
+    model = build_agent_model(settings, timeout_s=20.0, seed=7)
+
+    assert type(model).__name__ == "Groq"
+    assert model.temperature == 0
+    assert model.seed == 7
+    assert model.max_retries == 2
+
+
+def test_missing_provider_key_falls_back_to_baseline(artifact_dir, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    policy = AgnoRoundPolicy(
+        "active", "claude-opus-5-5", str(artifact_dir / "nokey.jsonl"),
+        settings=AgentSettings(provider="anthropic", model_id="claude-opus-5-5"),
+    )
+    result = policy.decide(
+        phase="pre_round",
+        context={"run_id": "r", "round": 1},
+        allowed_actions={"select", "skip"},
+        fallback={0: "select"},
+        required_counts={"select": 1},
+    )
+    event = json.loads((artifact_dir / "nokey.jsonl").read_text(encoding="utf-8"))
+
+    assert result.fallback_used is True
+    assert "ANTHROPIC_API_KEY" in event["error"]
+    assert event["provider"] == "anthropic"
+    assert event["model_id"] == "claude-opus-5-5"

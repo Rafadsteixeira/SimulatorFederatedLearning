@@ -25,6 +25,7 @@
   "enable_staleness": true,
   "staleness_gamma": 0.5,
   "agent_policy_mode": "shadow",
+  "agent_provider": "groq",
   "agent_model_id": "openai/gpt-oss-120b",
   "agent_timeout_s": 20.0,
   "agent_audit_file": "decisions.jsonl",
