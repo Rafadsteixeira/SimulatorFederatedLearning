@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-SOURCE = (PROJECT_DIR / "SimulatorFederatedLearning.py").read_text(encoding="utf-8")
+SOURCE = (PROJECT_DIR / "fl_engine.py").read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE)
 
 
