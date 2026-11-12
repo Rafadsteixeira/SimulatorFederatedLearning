@@ -275,6 +275,8 @@ def test_groq_model_keeps_deterministic_params():
 
 
 def test_missing_provider_key_falls_back_to_baseline(artifact_dir, monkeypatch):
+    # Impede que o .env real do desenvolvedor devolva a chave e dispare chamada paga.
+    monkeypatch.setattr("agno_policy.load_dotenv", lambda *args, **kwargs: False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     policy = AgnoRoundPolicy(
