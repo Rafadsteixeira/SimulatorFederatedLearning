@@ -17,7 +17,7 @@ from time import perf_counter
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 Action = Literal["select", "skip", "defer", "accept_stale", "reduce_weight", "discard"]
@@ -30,6 +30,7 @@ PROTOCOL_INSTRUCTIONS: tuple[str, ...] = (
     "Nunca invente clientes, metricas ou acoes fora da lista permitida.",
     "Retorne exatamente uma acao para cada cliente recebido, sem repetir IDs.",
     "Nao escolha pesos numericos: o simulador calcula pesos e limites.",
+    "Seja conciso: cada rationale com no maximo 200 caracteres e policy_summary com no maximo 400.",
 )
 
 # Criterio de decisao padrao; pode ser substituido por AGENT_INSTRUCTIONS.
@@ -155,6 +156,12 @@ class ClientAction(BaseModel):
     reason_codes: List[str] = Field(default_factory=list, max_length=4)
     rationale: str = Field(default="", max_length=300)
 
+    @field_validator("rationale", mode="before")
+    @classmethod
+    def _truncate_rationale(cls, value):
+        # Texto livre so vai para a auditoria: truncar evita perder a decisao inteira.
+        return value[:300] if isinstance(value, str) else value
+
 
 class RoundDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -162,6 +169,11 @@ class RoundDecision(BaseModel):
     phase: Literal["pre_round", "post_deadline"]
     actions: List[ClientAction] = Field(min_length=1)
     policy_summary: str = Field(default="", max_length=500)
+
+    @field_validator("policy_summary", mode="before")
+    @classmethod
+    def _truncate_summary(cls, value):
+        return value[:500] if isinstance(value, str) else value
 
 
 @dataclass

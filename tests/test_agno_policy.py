@@ -294,3 +294,16 @@ def test_missing_provider_key_falls_back_to_baseline(artifact_dir, monkeypatch):
     assert "ANTHROPIC_API_KEY" in event["error"]
     assert event["provider"] == "anthropic"
     assert event["model_id"] == "claude-opus-5-5"
+
+
+def test_long_rationale_is_truncated_instead_of_rejected():
+    from agno_policy import RoundDecision
+
+    decision = RoundDecision.model_validate({
+        "phase": "post_deadline",
+        "actions": [{"cid": 1, "action": "accept_stale", "rationale": "x" * 900}],
+        "policy_summary": "y" * 900,
+    })
+
+    assert len(decision.actions[0].rationale) == 300
+    assert len(decision.policy_summary) == 500
