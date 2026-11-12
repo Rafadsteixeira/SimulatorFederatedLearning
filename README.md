@@ -54,6 +54,8 @@ Cada chamada registra contexto, resposta, ação aplicada, fallback, seed, run_i
 
 O projeto requer Python 3.12 a 3.14 e usa uv para resolver e instalar as dependências declaradas.
 
+> **Windows:** a simulação do Flower usa o Ray, e o `flwr[simulation]` só instala o Ray em Python 3.12 no Windows (nas versões 3.13 e 3.14 ele é omitido e a execução falha com o código 701). No Windows, crie o ambiente com `uv sync --python 3.12` ou use o WSL2, onde 3.12 a 3.14 funcionam.
+
 ~~~powershell
 uv sync
 ~~~
@@ -62,6 +64,12 @@ Para executar a interface:
 
 ~~~powershell
 uv run python SimulatorFederatedLearning.py
+~~~
+
+Para executar sem interface (várias seeds, ideal para experimentos):
+
+~~~powershell
+uv run python run_experiment.py config_exemplo.json --seeds 42 43 44
 ~~~
 
 Para rodar os testes:
@@ -123,14 +131,16 @@ O gráfico da interface continua salvo em fl_results_v15/fl_cifar10_metrics.png.
 
 ## Estrutura
 
-- SimulatorFederatedLearning.py: interface Tkinter e integração com Flower.
+- fl_engine.py: topologia, clientes, Strategy e execução com Flower (sem interface).
+- run_experiment.py: executa um experimento pela linha de comando, com várias seeds.
+- SimulatorFederatedLearning.py: interface Tkinter (mapa de rede, rodadas e métricas).
 - experiment_core.py: particionamento, métricas, seleção, deadlines e agregação testáveis sem GUI.
 - agno_policy.py: schema, validação, modos baseline/shadow/active/replay e auditoria.
 - run_artifacts.py: persistência por execução.
 - docs/experimental_protocol.md: protocolo e definições das métricas.
 - tests/: testes do núcleo experimental, auditoria, configuração e avaliação.
 
-O projeto não usa uma camada MVC separada. A interface chama a execução experimental, enquanto as regras puras de seleção, deadline, particionamento e agregação ficam em módulos testáveis.
+O projeto não usa uma camada MVC separada. A interface Tkinter e o script de linha de comando chamam o mesmo motor (fl_engine.py), enquanto as regras puras de seleção, deadline, particionamento e agregação ficam em módulos testáveis.
 
 ## Avaliação
 

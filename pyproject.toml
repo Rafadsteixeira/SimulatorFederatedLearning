@@ -1,6 +1,6 @@
 [project]
 name = "simulator-federated-learning"
-version = "0.1.0"
+version = "3.0.0"
 description = "Simulador de aprendizado federado em infraestrutura de borda com politicas Agno auditaveis."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
