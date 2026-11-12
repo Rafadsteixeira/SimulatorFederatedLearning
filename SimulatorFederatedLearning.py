@@ -1328,12 +1328,6 @@ class TopologyAwareFedAvg(FlowerFedAvg):
             key=lambda proxy: int(proxy.cid) if str(proxy.cid).lstrip("-").isdigit() else 0,
         )
 
-    def _proxy_index(self, proxy: ClientProxy) -> int:
-        try:
-            return int(proxy.cid) % len(self.sorted_stations)
-        except (TypeError, ValueError):
-            return 0
-
     def _record_state(self, round_num: int, cid: int, state: str, **details: Any) -> None:
         if self.recorder is not None:
             self.recorder.record_client_state(round_num, cid, state, **details)
@@ -1468,20 +1462,22 @@ class TopologyAwareFedAvg(FlowerFedAvg):
                 on_time=timing.on_time,
             )
 
-        proxies_by_cid = {
-            self._proxy_index(proxy): proxy for proxy in self._sorted_proxies(client_manager)
-        }
-        config = {
-            "local_epochs": self.cfg.local_epochs,
-            "server_round": server_round,
-            "base_model_version": self._model_version,
-        }
-        fit_ins = FitIns(parameters, config)
-        return [
-            (proxies_by_cid[cid], fit_ins)
-            for cid in selected_indices
-            if cid in proxies_by_cid
-        ]
+        proxies = self._sorted_proxies(client_manager)
+        if len(proxies) < len(selected_indices):
+            raise RuntimeError(
+                f"Flower registrou {len(proxies)} clientes, mas {len(selected_indices)} "
+                "foram selecionados"
+            )
+        instructions = []
+        for proxy, cid in zip(proxies, selected_indices):
+            config = {
+                "local_epochs": self.cfg.local_epochs,
+                "server_round": server_round,
+                "base_model_version": self._model_version,
+                "station_idx": cid,
+            }
+            instructions.append((proxy, FitIns(parameters, config)))
+        return instructions
 
     def configure_evaluate(self, server_round, parameters, client_manager):
         # Validation occurs once on the global test set in evaluate_and_record_round.
@@ -1526,7 +1522,8 @@ class TopologyAwareFedAvg(FlowerFedAvg):
         round_end_time = self._round_start_time + self._round_deadline
         selected = self._invited_by_round.pop(server_round, set())
         received: Dict[int, tuple[ClientProxy, FitRes]] = {
-            self._proxy_index(proxy): (proxy, fit_res) for proxy, fit_res in results
+            int(fit_res.metrics["station_idx"]): (proxy, fit_res)
+            for proxy, fit_res in results
         }
         accepted: List[tuple[int, NDArrays, int, Dict, float, Dict]] = []
         clients_detail: List[Dict[str, Any]] = []
@@ -1963,25 +1960,38 @@ def _prepare_fl_state(cfg: ExperimentConfig):
           f"(Non-IID, seed={cfg.seed})")
 
 
-def client_fn(context: Context) -> fl.client.Client:
-    """
-    Factory de clientes para o ClientApp do Flower.
-    node_id e atribuido sequencialmente (0..N-1) pelo run_simulation,
-    mapeando diretamente ao indice em _sorted_stations.
-    """
-    node_id = int(context.node_id)
-    idx     = node_id % len(_sorted_stations)
-    bs      = _sorted_stations[idx]
-    partition = _partitions[idx]
+class StationClient(NumPyClient):
+    """Cliente generico: a estacao e escolhida pelo servidor via config['station_idx'].
 
-    cfg = active_config if active_config else ExperimentConfig()
-    profile = _client_profiles[idx]
-    client = CifarFederatedClient(
-        cid=idx, base_station=bs,
-        partition=partition, batch_size=cfg.batch_size,
-        label_entropy=profile.entropy, seed=cfg.seed + idx * 1009,
-    )
-    return client.to_client()
+    Os node_ids do Flower sao inteiros aleatorios, entao nao ha mapeamento
+    estavel entre node_id e indice de estacao. O servidor indica o indice a
+    cada rodada e o cliente devolve 'station_idx' nas metricas.
+    """
+
+    @staticmethod
+    def _build(idx: int) -> CifarFederatedClient:
+        idx = int(idx) % len(_sorted_stations)
+        cfg = active_config if active_config else ExperimentConfig()
+        profile = _client_profiles[idx]
+        return CifarFederatedClient(
+            cid=idx, base_station=_sorted_stations[idx],
+            partition=_partitions[idx], batch_size=cfg.batch_size,
+            label_entropy=profile.entropy, seed=cfg.seed + idx * 1009,
+        )
+
+    def get_parameters(self, config) -> NDArrays:
+        return self._build(0).get_parameters(config)
+
+    def fit(self, parameters: NDArrays, config) -> Tuple[NDArrays, int, Dict]:
+        idx = int(config["station_idx"])
+        weights, n_train, metrics = self._build(idx).fit(parameters, config)
+        metrics["station_idx"] = idx
+        return weights, n_train, metrics
+
+
+def client_fn(context: Context) -> fl.client.Client:
+    """Factory de clientes para o ClientApp do Flower."""
+    return StationClient().to_client()
 
 
 # ==============================================================================
