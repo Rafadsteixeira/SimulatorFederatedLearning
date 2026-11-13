@@ -131,7 +131,10 @@ O gráfico da interface continua salvo em fl_results_v15/fl_cifar10_metrics.png.
 
 ## Estrutura
 
-- fl_engine.py: topologia, clientes, Strategy e execução com Flower (sem interface).
+- fl_engine.py: dataset, cliente, seleção, Strategy e execução com Flower (sem interface).
+- experiment_config.py: ExperimentConfig, caminhos e constantes do CIFAR-10.
+- edge_network.py: topologia Edge Computing, tempo virtual dos clientes e perfis de dados.
+- cifar_model.py: CNN e treino/avaliação local.
 - run_experiment.py: executa um experimento pela linha de comando, com várias seeds.
 - SimulatorFederatedLearning.py: interface Tkinter (mapa de rede, rodadas e métricas).
 - experiment_core.py: particionamento, métricas, seleção, deadlines e agregação testáveis sem GUI.

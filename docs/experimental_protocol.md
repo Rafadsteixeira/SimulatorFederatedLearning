@@ -61,6 +61,12 @@ O perfil pré-rodada contém distribuição de classes, entropia, cobertura de c
 
 A norma da atualização mede magnitude, não contribuição causal. O registro também calcula o alinhamento do delta local com o delta agregado. A política recebe esses sinais históricos junto da taxa de atraso e participação do cliente. Não há afirmação de contribuição leave-one-out.
 
+## Feedback ao agente e influência de decisões anteriores
+
+O agente não recebe uma recompensa explícita. O feedback é indireto e verificável: a cada chamada, o contexto traz as últimas três rodadas (val_loss, val_acc, clientes no prazo e atrasados) e, por cliente, o histórico acumulado (vezes selecionado, última rodada, atualizações observadas e aceitas, taxa de atraso, staleness médio, norma da atualização e alinhamento com a agregação).
+
+Assim, uma decisão anterior influencia as seguintes por dois caminhos: altera o histórico do cliente escolhido (por exemplo, quem foi convidado e atrasou passa a ter taxa de atraso maior) e altera a evolução do modelo global, visível em recent_rounds. O agente não vê as próprias justificativas anteriores; elas ficam apenas na auditoria (decisions.jsonl) para análise posterior.
+
 ## Fases da política
 
 ### Pré-rodada
