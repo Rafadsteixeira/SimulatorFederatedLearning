@@ -38,7 +38,7 @@ from torchvision.datasets import CIFAR10
 # Flower
 import flwr as fl
 from flwr.client import ClientApp, NumPyClient
-from flwr.server import ServerApp, ServerConfig
+from flwr.server import ServerApp, ServerAppComponents, ServerConfig
 from flwr.server.strategy import FedAvg as FlowerFedAvg
 from flwr.server.client_proxy import ClientProxy
 from flwr.common import (
@@ -75,665 +75,63 @@ from experiment_core import (
 )
 from run_artifacts import RunArtifactRecorder
 
-
-# ==============================================================================
-#  CONFIGURACAO DO EXPERIMENTO
-# ==============================================================================
-
-@dataclass
-class ExperimentConfig:
-    n_clients:                int   = 5
-    n_rounds:                 int   = 5
-    weight_mode:              str   = "random"
-    fixed_weights:            Dict  = field(default_factory=dict)
-    high_latency_periodicity: int   = 0
-    high_latency_fraction:    float = 0.3
-    seed:                     int   = 42
-    local_epochs:             int   = 1
-    batch_size:               int   = 32
-
-    # Modelo de tempo, deadlines e staleness
-    deadline_mode:            str   = "percentile"  # 'fixed' ou 'percentile'
-    round_deadline:           float = 12.0          # segundos simulados (se deadline_mode == 'fixed')
-    deadline_percentile:      float = 80.0          # percentil de corte (se deadline_mode == 'percentile')
-    comp_time_per_sample:     float = 0.005         # tempo computacional base (s/amostra/epoca)
-    enable_staleness:         bool  = True          # aplicar amortecimento de staleness na agregacao
-    staleness_gamma:          float = 0.5           # expoente de penalizacao: 1 / (1 + tau)^gamma
-    drop_stragglers:          bool  = False         # Compatibilidade: equivale a late_update_policy='discard'
-    late_update_policy:       str   = "reduced_weight"  # discard, defer ou reduced_weight
-    late_update_weight_factor: float = 0.5
-    max_staleness:            int   = 2
-
-    # Baselines de selecao e score multiobjetivo fixo.
-    selection_mode:           str   = "multi_objective"
-    selection_info_weight:    float = 0.45
-    selection_rare_weight:    float = 0.25
-    selection_diversity_weight: float = 0.15
-    selection_time_weight:    float = 0.15
-    rare_class_threshold:     float = 0.08
-    time_jitter_fraction:     float = 0.0
-
-    # Politica opcional baseada em LLM/Agno.
-    # Em shadow o agente decide e audita, mas o baseline continua sendo aplicado.
-    agent_policy_mode:        str   = "shadow"  # baseline, shadow, active ou replay
-    # Provedor e modelo Agno ("provider:model_id"); AGENT_PROVIDER e
-    # AGENT_MODEL_ID no ambiente/.env tem precedencia sobre estes valores.
-    agent_provider:           str   = "groq"
-    agent_model_id:           str   = "openai/gpt-oss-120b"
-    agent_timeout_s:          float = 20.0
-    agent_audit_file:         str   = "decisions.jsonl"
-    agent_replay_file:        str   = ""
-
-    @classmethod
-    def from_json(cls, path: str) -> "ExperimentConfig":
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        cfg = cls()
-        cfg.n_clients                = int(data.get('n_clients',                cfg.n_clients))
-        cfg.n_rounds                 = int(data.get('n_rounds',                 cfg.n_rounds))
-        cfg.weight_mode              = str(data.get('weight_mode',              cfg.weight_mode))
-        fw = {k: v for k, v in data.get('fixed_weights', {}).items()
-              if k.lstrip('-').isdigit()}
-        cfg.fixed_weights            = {int(k): float(v) for k, v in fw.items()}
-        cfg.high_latency_periodicity = int(data.get('high_latency_periodicity', cfg.high_latency_periodicity))
-        cfg.high_latency_fraction    = float(data.get('high_latency_fraction',  cfg.high_latency_fraction))
-        cfg.seed                     = int(data.get('seed',                     cfg.seed))
-        cfg.local_epochs             = int(data.get('local_epochs',             cfg.local_epochs))
-        cfg.batch_size               = int(data.get('batch_size',               cfg.batch_size))
-
-        cfg.deadline_mode            = str(data.get('deadline_mode',            cfg.deadline_mode))
-        cfg.round_deadline           = float(data.get('round_deadline',         cfg.round_deadline))
-        cfg.deadline_percentile      = float(data.get('deadline_percentile',    cfg.deadline_percentile))
-        cfg.comp_time_per_sample     = float(data.get('comp_time_per_sample',   cfg.comp_time_per_sample))
-        cfg.enable_staleness         = bool(data.get('enable_staleness',        cfg.enable_staleness))
-        cfg.staleness_gamma          = float(data.get('staleness_gamma',        cfg.staleness_gamma))
-        cfg.drop_stragglers          = bool(data.get('drop_stragglers',         cfg.drop_stragglers))
-        legacy_policy = "discard" if cfg.drop_stragglers else cfg.late_update_policy
-        cfg.late_update_policy       = str(data.get('late_update_policy', legacy_policy))
-        cfg.late_update_weight_factor = float(data.get('late_update_weight_factor', cfg.late_update_weight_factor))
-        cfg.max_staleness            = int(data.get('max_staleness', cfg.max_staleness))
-        cfg.selection_mode           = str(data.get('selection_mode', cfg.selection_mode))
-        cfg.selection_info_weight    = float(data.get('selection_info_weight', cfg.selection_info_weight))
-        cfg.selection_rare_weight    = float(data.get('selection_rare_weight', cfg.selection_rare_weight))
-        cfg.selection_diversity_weight = float(data.get('selection_diversity_weight', cfg.selection_diversity_weight))
-        cfg.selection_time_weight    = float(data.get('selection_time_weight', cfg.selection_time_weight))
-        cfg.rare_class_threshold     = float(data.get('rare_class_threshold', cfg.rare_class_threshold))
-        cfg.time_jitter_fraction     = float(data.get('time_jitter_fraction', cfg.time_jitter_fraction))
-        cfg.agent_policy_mode        = str(data.get('agent_policy_mode', cfg.agent_policy_mode))
-        cfg.agent_provider           = str(data.get('agent_provider', cfg.agent_provider)).strip().lower()
-        cfg.agent_model_id           = str(data.get('agent_model_id', cfg.agent_model_id))
-        cfg.agent_timeout_s          = float(data.get('agent_timeout_s', cfg.agent_timeout_s))
-        cfg.agent_audit_file         = str(data.get('agent_audit_file', cfg.agent_audit_file))
-        cfg.agent_replay_file        = str(data.get('agent_replay_file', cfg.agent_replay_file))
-
-        if cfg.n_clients < 1 or cfg.n_rounds < 1:
-            raise ValueError("n_clients e n_rounds devem ser maiores que zero")
-        if cfg.local_epochs < 1 or cfg.batch_size < 1:
-            raise ValueError("local_epochs e batch_size devem ser maiores que zero")
-        if cfg.seed < 0:
-            raise ValueError("seed deve ser nao negativa")
-        if cfg.high_latency_periodicity < 0:
-            raise ValueError("high_latency_periodicity deve ser nao negativa")
-        if not np.isfinite(cfg.high_latency_fraction) or not 0 <= cfg.high_latency_fraction <= 1:
-            raise ValueError("high_latency_fraction deve estar entre 0 e 1")
-
-        if cfg.weight_mode not in ("random", "fixed"):
-            raise ValueError(f"weight_mode deve ser 'random' ou 'fixed', recebido: {cfg.weight_mode!r}")
-        if cfg.deadline_mode not in ("fixed", "percentile"):
-            raise ValueError("deadline_mode deve ser 'fixed' ou 'percentile'")
-        if not np.isfinite(cfg.round_deadline) or cfg.round_deadline <= 0:
-            raise ValueError("round_deadline deve ser maior que zero")
-        if not np.isfinite(cfg.deadline_percentile) or not 0 <= cfg.deadline_percentile <= 100:
-            raise ValueError("deadline_percentile deve estar entre 0 e 100")
-        if not np.isfinite(cfg.comp_time_per_sample) or cfg.comp_time_per_sample < 0:
-            raise ValueError("comp_time_per_sample deve ser finito e nao negativo")
-        if not np.isfinite(cfg.staleness_gamma) or cfg.staleness_gamma < 0:
-            raise ValueError("staleness_gamma deve ser finito e nao negativo")
-        if cfg.max_staleness < 0:
-            raise ValueError("max_staleness deve ser nao negativo")
-        if cfg.late_update_policy not in ("discard", "defer", "reduced_weight"):
-            raise ValueError("late_update_policy deve ser 'discard', 'defer' ou 'reduced_weight'")
-        if not np.isfinite(cfg.late_update_weight_factor) or not 0 < cfg.late_update_weight_factor <= 1:
-            raise ValueError("late_update_weight_factor deve estar no intervalo (0, 1]")
-        if cfg.selection_mode not in ("random", "fastest", "dijkstra", "latency", "multi_objective"):
-            raise ValueError("selection_mode deve ser random, fastest, dijkstra ou multi_objective")
-        if not np.isfinite(cfg.rare_class_threshold) or not 0 <= cfg.rare_class_threshold <= 1:
-            raise ValueError("rare_class_threshold deve estar entre 0 e 1")
-        if not np.isfinite(cfg.time_jitter_fraction) or not 0 <= cfg.time_jitter_fraction <= 1:
-            raise ValueError("time_jitter_fraction deve estar entre 0 e 1")
-        selection_weights = (
-            cfg.selection_info_weight,
-            cfg.selection_rare_weight,
-            cfg.selection_diversity_weight,
-            cfg.selection_time_weight,
-        )
-        if (not all(np.isfinite(weight) and weight >= 0 for weight in selection_weights)
-                or sum(selection_weights) <= 0):
-            raise ValueError("pesos de selecao devem ser nao negativos e ter soma positiva")
-        if cfg.agent_policy_mode not in ("baseline", "shadow", "active", "replay"):
-            raise ValueError(
-                "agent_policy_mode deve ser baseline, shadow, active ou replay"
-            )
-        if not cfg.agent_provider.strip():
-            raise ValueError("agent_provider nao pode ser vazio")
-        if not cfg.agent_model_id.strip():
-            raise ValueError("agent_model_id nao pode ser vazio")
-        if not np.isfinite(cfg.agent_timeout_s) or cfg.agent_timeout_s <= 0:
-            raise ValueError("agent_timeout_s deve ser maior que zero")
-        if not cfg.agent_audit_file.strip():
-            raise ValueError("agent_audit_file nao pode ser vazio")
-        if cfg.agent_policy_mode == "replay" and not cfg.agent_replay_file.strip():
-            raise ValueError("agent_replay_file e obrigatorio no modo replay")
-        return cfg
-
-    def to_summary_lines(self) -> List[str]:
-        mode_str = "Aleatorio" if self.weight_mode == "random" else "Fixo"
-        dl_str   = f"Fixo ({self.round_deadline:.1f}s)" if self.deadline_mode == "fixed" else f"P{int(self.deadline_percentile)}"
-        lines = [
-            f"Clientes  : {self.n_clients}",
-            f"Rounds    : {self.n_rounds}",
-            f"Pesos     : {mode_str}",
-            f"Deadline  : {dl_str}",
-            f"Staleness : {'Ativo' if self.enable_staleness else 'Inativo'}",
-        ]
-        if self.high_latency_periodicity > 0:
-            lines.append(f"Alta-lat. : a cada {self.high_latency_periodicity} rounds")
-            lines.append(f"Fracao    : {int(self.high_latency_fraction * 100)}%")
-        else:
-            lines.append("Alta-lat. : desativada")
-        lines.append(f"Agno      : {self.agent_policy_mode.upper()}")
-        lines.append(f"Selecao   : {self.selection_mode}")
-        lines.append(
-            f"Atrasos   : {self.late_update_policy} "
-            f"(fator={self.late_update_weight_factor:.2f}, max tau={self.max_staleness})"
-        )
-        if self.agent_policy_mode != "baseline":
-            lines.append(f"LLM       : {self.agent_provider}:{self.agent_model_id}")
-        lines.append(f"Seed      : {self.seed}")
-        lines.append(f"Epocas loc: {self.local_epochs}")
-        lines.append(f"Batch     : {self.batch_size}")
-        return lines
-
-
-# Caminho absoluto do diretório do script — usado em todos os paths de dados
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# ==============================================================================
-#  INFRAESTRUTURA DE REDE
-# ==============================================================================
-
-class NetworkSwitch:
-    _all = []
-    _id_counter = 1
-
-    def __init__(self):
-        self.id = NetworkSwitch._id_counter
-        NetworkSwitch._id_counter += 1
-        self.coordinates = None
-        self.base_station = None
-        NetworkSwitch._all.append(self)
-
-    @classmethod
-    def all(cls):
-        return list(cls._all)
-
-    @classmethod
-    def _reset(cls):
-        cls._all = []
-        cls._id_counter = 1
-
-    def __repr__(self):
-        return f"NetworkSwitch(id={self.id})"
-
-
-class BaseStation:
-    _all = []
-    _id_counter = 1
-
-    def __init__(self):
-        self.id = BaseStation._id_counter
-        BaseStation._id_counter += 1
-        self.wireless_delay = 0
-        self.coordinates = None
-        self.network_switch = None
-        self.edge_servers = []
-        BaseStation._all.append(self)
-
-    def _connect_to_network_switch(self, network_switch):
-        self.network_switch = network_switch
-        network_switch.base_station = self
-        network_switch.coordinates = self.coordinates
-
-    def _connect_to_edge_server(self, edge_server):
-        self.edge_servers.append(edge_server)
-        edge_server.base_station = self
-
-    @classmethod
-    def all(cls):
-        return list(cls._all)
-
-    @classmethod
-    def _reset(cls):
-        cls._all = []
-        cls._id_counter = 1
-
-    def __repr__(self):
-        return f"BaseStation(id={self.id}, coords={self.coordinates})"
-
-
-class EdgeServer:
-    _all = []
-    _id_counter = 1
-
-    def __init__(self, cpu=32, memory=128):
-        self.id = EdgeServer._id_counter
-        EdgeServer._id_counter += 1
-        self.cpu = cpu
-        self.memory = memory
-        self.base_station = None
-        EdgeServer._all.append(self)
-
-    @classmethod
-    def all(cls):
-        return list(cls._all)
-
-    @classmethod
-    def _reset(cls):
-        cls._all = []
-        cls._id_counter = 1
-
-    def __repr__(self):
-        return f"EdgeServer(id={self.id})"
-
-
-class User:
-    _all = []
-    _id_counter = 1
-
-    def __init__(self):
-        self.id = User._id_counter
-        User._id_counter += 1
-        self.coordinates = None
-        self.base_station = None
-        User._all.append(self)
-
-    def _set_initial_position(self, coordinates):
-        self.coordinates = coordinates
-        for bs in BaseStation.all():
-            if (abs(bs.coordinates[0] - coordinates[0]) < 1e-6 and
-                    abs(bs.coordinates[1] - coordinates[1]) < 1e-6):
-                self.base_station = bs
-                break
-
-    @classmethod
-    def all(cls):
-        return list(cls._all)
-
-    @classmethod
-    def _reset(cls):
-        cls._all = []
-        cls._id_counter = 1
-
-    def __repr__(self):
-        return f"User(id={self.id})"
-
-
-class Topology(nx.Graph):
-    _instance = None
-
-    def __init__(self):
-        super().__init__()
-        Topology._instance = self
-
-    @classmethod
-    def first(cls):
-        return cls._instance
-
-    @classmethod
-    def _reset(cls):
-        cls._instance = None
-
-    def calculate_path_delay(self, path):
-        delay = 0.0
-        for i in range(len(path) - 1):
-            delay += self.edges[path[i], path[i + 1]]['delay']
-        return delay
-
-
-class ScenarioExporter:
-    """Exporta topologia de rede para arquivo JSON."""
-
-    @staticmethod
-    def export(save_to_file=True, file_name="scenario"):
-        if not save_to_file:
-            return
-        _ds_dir = os.path.join(_SCRIPT_DIR, "datasets")
-        os.makedirs(_ds_dir, exist_ok=True)
-        data = {
-            "base_stations": [
-                {"id": bs.id, "coordinates": list(bs.coordinates),
-                 "wireless_delay": bs.wireless_delay}
-                for bs in BaseStation.all()
-            ],
-            "edge_servers": [
-                {"id": es.id, "cpu": es.cpu, "memory": es.memory,
-                 "base_station_id": es.base_station.id if es.base_station else None}
-                for es in EdgeServer.all()
-            ],
-        }
-        path = os.path.join(_ds_dir, f"{file_name}.json")
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
-        print(f"  Dataset exportado -> {path}")
-
-
-# ==============================================================================
-#  UTILITARIOS DE TOPOLOGIA
-# ==============================================================================
-
-def hexagonal_grid(x_size, y_size):
-    coords = []
-    dy = round(3 ** 0.5 / 2, 6)
-    for row in range(y_size):
-        x_offset = 0.5 if row % 2 == 1 else 0.0
-        for col in range(x_size):
-            coords.append((round(col + x_offset, 6), round(row * dy, 6)))
-    return coords
-
-
-def partially_connected_hexagonal_mesh(network_nodes, link_specifications):
-    topology = Topology()
-    nodes = list(network_nodes)
-    for node in nodes:
-        topology.add_node(node)
-
-    link_idx = 0
-    connected = set()
-    for i, n1 in enumerate(nodes):
-        for j, n2 in enumerate(nodes):
-            if i >= j:
-                continue
-            pair = (i, j)
-            if pair in connected:
-                continue
-            dx = n1.coordinates[0] - n2.coordinates[0]
-            dy = n1.coordinates[1] - n2.coordinates[1]
-            dist = (dx * dx + dy * dy) ** 0.5
-            if dist <= 1.01 and link_idx < len(link_specifications):
-                spec = link_specifications[link_idx]
-                topology.add_edge(n1, n2,
-                                  delay=spec['delay'],
-                                  bandwidth=spec['bandwidth'])
-                connected.add(pair)
-                link_idx += 1
-    return topology
-
-
-def generate_random_links(num_links):
-    return [{"delay": round(random.uniform(1, 5), 2),
-             "bandwidth": random.randint(5, 20)} for _ in range(num_links)]
-
-
-# ==============================================================================
-#  INICIALIZACAO DA TOPOLOGIA
-# ==============================================================================
-
-random.seed(42)
-
-map_coordinates = hexagonal_grid(x_size=5, y_size=5)
-
-for coords in map_coordinates:
-    bs = BaseStation()
-    bs.wireless_delay = 0
-    bs.coordinates = coords
-    sw = NetworkSwitch()
-    bs._connect_to_network_switch(sw)
-    # Servidor de borda com capacidade heterogenea por estacao base
-    es = EdgeServer(cpu=random.choice([16, 24, 32, 48]), memory=64)
-    bs._connect_to_edge_server(es)
-
-partially_connected_hexagonal_mesh(
-    network_nodes=NetworkSwitch.all(),
-    link_specifications=generate_random_links(100)
+# Modulos extraidos do motor (reexportados aqui para a GUI e os testes).
+from experiment_config import (
+    CLASS_COLORS,
+    CLASS_NAMES,
+    DATA_DIR,
+    ExperimentConfig,
+    NUM_CLASSES,
+    RESULTS_DIR,
+    _SCRIPT_DIR,
+)
+from edge_network import (
+    BaseStation,
+    CENTRAL_BS,
+    CENTRAL_SERVER,
+    CENTRAL_SW,
+    ClientProfile,
+    ClientTimingResult,
+    EdgeServer,
+    NetworkSwitch,
+    PendingUpdate,
+    ScenarioExporter,
+    Topology,
+    User,
+    _dijkstra_lengths,
+    betweenness,
+    bs,
+    build_client_profiles,
+    central_server,
+    central_switch,
+    client_stations,
+    compute_client_timing,
+    coords,
+    dijkstra_distances,
+    generate_random_links,
+    get_dijkstra_path,
+    get_model_size_megabits,
+    get_path_network_metrics,
+    get_path_to_server,
+    hexagonal_grid,
+    i,
+    map_coordinates,
+    partially_connected_hexagonal_mesh,
+    topology_ref,
+)
+from cifar_model import (
+    CifarCNN,
+    DEVICE,
+    eval_image_local,
+    get_weights,
+    set_weights,
+    train_image_local,
 )
 
-topology_ref = Topology.first()
-betweenness = nx.betweenness_centrality(topology_ref, weight='delay')
-central_switch = max(betweenness, key=betweenness.get)
-
-central_server = EdgeServer(cpu=64, memory=256)
-central_switch.base_station.edge_servers = [central_server]
-central_server.base_station = central_switch.base_station
-
-CENTRAL_SERVER = central_server
-CENTRAL_BS     = central_server.base_station
-CENTRAL_SW     = central_switch
-
-print(f"\n  Servidor Central -> BS{CENTRAL_BS.id} | Switch S{CENTRAL_SW.id}")
-print(f"  Betweenness centrality: {betweenness[CENTRAL_SW]:.4f}")
-print(f"  Coordenadas: {CENTRAL_BS.coordinates}")
-print(f"  Clientes FL: {len(BaseStation.all()) - 1} nos\n")
-
-ScenarioExporter.export(save_to_file=True, file_name="sample_dataset_v15")
-
-_dijkstra_lengths = nx.single_source_dijkstra_path_length(
-    topology_ref, CENTRAL_SW, weight='delay'
-)
-dijkstra_distances: Dict = dict(_dijkstra_lengths)
-
-client_stations: List[BaseStation] = sorted(
-    [bs for bs in BaseStation.all() if bs != CENTRAL_BS],
-    key=lambda bs: dijkstra_distances.get(bs.network_switch, float('inf'))
-)
-
-print("  Ordem Dijkstra (clientes por distancia ao servidor):")
-for i, bs in enumerate(client_stations):
-    d = dijkstra_distances.get(bs.network_switch, float('inf'))
-    print(f"    [{i:02d}] BS{bs.id}  dist={d:.2f}ms")
-print()
-
-
-def get_dijkstra_path(from_switch, to_switch):
-    try:
-        return nx.shortest_path(topology_ref, source=from_switch,
-                                target=to_switch, weight='delay')
-    except Exception:
-        return []
-
-
-def get_path_to_server(base_station: BaseStation):
-    path = get_dijkstra_path(base_station.network_switch, CENTRAL_SW)
-    delay = topology_ref.calculate_path_delay(path) if len(path) >= 2 else float('inf')
-    return path, delay
-
-
-def get_path_network_metrics(base_station: BaseStation) -> Tuple[float, float, List]:
-    """
-    Retorna (latencia_total_ms, bottleneck_bandwidth_mbps, caminho_switches)
-    ao longo do caminho mais curto (Dijkstra) ate o switch central.
-    """
-    path = get_dijkstra_path(base_station.network_switch, CENTRAL_SW)
-    if len(path) < 2:
-        return 0.0, 20.0, path
-
-    total_delay_ms = 0.0
-    bottleneck_bw  = float('inf')
-
-    for i in range(len(path) - 1):
-        edge_data = topology_ref.edges[path[i], path[i + 1]]
-        total_delay_ms += edge_data.get('delay', 1.0)
-        bw = edge_data.get('bandwidth', 10.0)
-        if bw < bottleneck_bw:
-            bottleneck_bw = bw
-
-    if bottleneck_bw == float('inf'):
-        bottleneck_bw = 10.0
-
-    return total_delay_ms, bottleneck_bw, path
-
-
-def get_model_size_megabits(model: nn.Module) -> float:
-    """Tamanho do modelo em Megabits (Mb) com parametros float32 (32 bits)."""
-    total_params = sum(p.numel() for p in model.parameters())
-    return float((total_params * 32) / 1e6)
-
-
-@dataclass
-class ClientTimingResult:
-    cid:            int
-    bs_id:          int
-    t_down:         float  # tempo de download do modelo (s)
-    t_comp:         float  # tempo de treinamento local (s)
-    t_up:           float  # tempo de upload dos pesos (s)
-    t_total:        float  # tempo total da iteracao (s)
-    arrival_time:   float  # momento de chegada no servidor (s)
-    deadline:       float  # deadline da rodada (s)
-    on_time:        bool   # se concluiu dentro do deadline
-    staleness:      int    # nivel de desatualizacao / rounds atrasados (tau)
-    bandwidth_mbps: float  # largura de banda do gargalo no caminho (Mbps)
-    latency_ms:     float  # latencia acumulada no caminho (ms)
-
-
-def compute_client_timing(
-    client_station: BaseStation,
-    cid: int,
-    n_samples: int,
-    epochs: int,
-    model_size_megabits: float,
-    cfg: ExperimentConfig,
-    round_deadline: float,
-    round_start_time: float = 0.0,
-    accumulated_staleness: int = 0,
-    client_profile: Optional["ClientProfile"] = None,
-) -> ClientTimingResult:
-    """
-    Calcula analiticamente a duracao de download, treinamento local,
-    upload e o momento de chegada para o cliente na rodada.
-    """
-    latency_ms, bottleneck_bw, _ = get_path_network_metrics(client_station)
-    # CPU e variacao sao dados do perfil; o tempo permanece uma estimativa virtual.
-    cpu_cores = 32
-    if client_station.edge_servers:
-        cpu_cores = client_station.edge_servers[0].cpu
-    profile_factor = client_profile.compute_factor if client_profile else 1.0
-    duration = estimate_virtual_duration(
-        model_size_megabits=model_size_megabits,
-        n_samples=n_samples,
-        epochs=epochs,
-        comp_time_per_sample=cfg.comp_time_per_sample,
-        bandwidth_mbps=bottleneck_bw,
-        latency_ms=latency_ms,
-        cpu_cores=cpu_cores,
-        compute_factor=profile_factor,
-        jitter_fraction=client_profile.time_jitter if client_profile else 0.0,
-    )
-    t_down = duration["download_s"]
-    t_comp = duration["compute_s"]
-    t_up = duration["upload_s"]
-    t_total = duration["total_s"]
-    arrival_time = round_start_time + t_total
-
-    on_time = (
-        deadline_status(arrival_time, round_start_time + round_deadline)[0]
-        if round_deadline > 0 else True
-    )
-    staleness = accumulated_staleness if on_time else (accumulated_staleness + 1)
-
-    return ClientTimingResult(
-        cid=cid,
-        bs_id=client_station.id,
-        t_down=round(t_down, 3),
-        t_comp=round(t_comp, 3),
-        t_up=round(t_up, 3),
-        t_total=round(t_total, 3),
-        arrival_time=round(arrival_time, 3),
-        deadline=round(round_deadline, 3),
-        on_time=on_time,
-        staleness=staleness,
-        bandwidth_mbps=round(bottleneck_bw, 2),
-        latency_ms=round(latency_ms, 2),
-    )
-
-
-@dataclass
-class ClientProfile:
-    """Metadados verificaveis usados antes de convidar um cliente."""
-    cid: int
-    label_counts: List[int]
-    entropy: float
-    rare_coverage: float
-    js_divergence: float
-    compute_factor: float = 1.0
-    time_jitter: float = 0.0
-
-    @property
-    def information_score(self) -> float:
-        entropy_norm = self.entropy / max(np.log2(NUM_CLASSES), 1e-12)
-        js_norm = self.js_divergence / max(np.log(2.0), 1e-12)
-        return float(0.5 * entropy_norm + 0.5 * min(js_norm, 1.0))
-
-
-@dataclass
-class PendingUpdate:
-    """Atualizacao que chegou apos o deadline e pode ser tratada em rodada futura."""
-    cid: int
-    base_version: int
-    arrival_time: float
-    payload: Any
-    n_samples: int
-    metrics: Dict
-    invited_round: int = 0
-    round_start_time: float = 0.0
-    round_deadline: float = 0.0
-    t_total: float = 0.0
-
-
-def build_client_profiles(partitions: List[Subset], cfg: ExperimentConfig) -> Dict[int, ClientProfile]:
-    """Pre-calcula distribuicao, entropia, cobertura rara e JS para cada cliente."""
-    all_counts: List[np.ndarray] = []
-    for subset in partitions:
-        targets = getattr(subset.dataset, "targets", [])
-        labels = [int(targets[i]) for i in subset.indices]
-        all_counts.append(np.bincount(labels, minlength=NUM_CLASSES).astype(float))
-    train_targets = getattr(_cifar_trainset, "targets", [])
-    aggregate = np.bincount(train_targets, minlength=NUM_CLASSES).astype(float)
-    profiles: Dict[int, ClientProfile] = {}
-    for cid, counts in enumerate(all_counts):
-        metrics = label_distribution_metrics(
-            counts, aggregate, cfg.rare_class_threshold
-        )
-        rng = random.Random(cfg.seed + cid * 1009)
-        profiles[cid] = ClientProfile(
-            cid=cid, label_counts=counts.astype(int).tolist(),
-            entropy=metrics["entropy"], rare_coverage=metrics["rare_coverage"],
-            js_divergence=metrics["js_divergence"],
-            compute_factor=rng.uniform(0.7, 1.3),
-            time_jitter=rng.uniform(-cfg.time_jitter_fraction, cfg.time_jitter_fraction),
-        )
-    return profiles
 
 # ==============================================================================
 #  DATASET CIFAR-10
 # ==============================================================================
-
-# Caminhos absolutos relativos ao diretório do script
-DATA_DIR    = os.path.join(_SCRIPT_DIR, "data_cifar10")
-RESULTS_DIR = os.path.join(_SCRIPT_DIR, "fl_results_v15")
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(RESULTS_DIR, exist_ok=True)
-
-NUM_CLASSES = 10
-CLASS_NAMES = [
-    "aviao", "automovel", "passaro", "gato", "veado",
-    "cachorro", "sapo", "cavalo", "navio", "caminhao"
-]
-CLASS_COLORS = [
-    "#4FC3F7", "#EF5350", "#66BB6A", "#FFA726", "#AB47BC",
-    "#26C6DA", "#D4E157", "#FF7043", "#42A5F5", "#8D6E63"
-]
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"  Dispositivo de computacao: {DEVICE}\n")
 
 TRANSFORM_TRAIN = transforms.Compose([
     transforms.RandomHorizontalFlip(p=0.5),
@@ -816,94 +214,6 @@ def load_sample_images_for_map():
 
     _images_loaded = True
     print(f"  [Imagens] {len(_client_sample_images)} thumbnails carregados")
-
-
-# ==============================================================================
-#  MODELO CNN
-# ==============================================================================
-
-class CifarCNN(nn.Module):
-    def __init__(self, num_classes: int = NUM_CLASSES):
-        super().__init__()
-        self.conv_block1 = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2, 2),
-            nn.Dropout(0.25)
-        )
-        self.conv_block2 = nn.Sequential(
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2, 2),
-            nn.Dropout(0.25)
-        )
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(64 * 8 * 8, 512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(512, num_classes)
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.classifier(self.conv_block2(self.conv_block1(x)))
-
-
-def get_weights(model: nn.Module) -> NDArrays:
-    return [v.cpu().detach().numpy() for v in model.state_dict().values()]
-
-
-def set_weights(model: nn.Module, weights: NDArrays) -> None:
-    params_dict = zip(model.state_dict().keys(), weights)
-    state_dict = OrderedDict(
-        {k: torch.tensor(v, dtype=torch.float32) for k, v in params_dict}
-    )
-    model.load_state_dict(state_dict, strict=True)
-
-
-def train_image_local(model: nn.Module, loader: DataLoader,
-                      epochs: int = 1) -> Tuple[float, float]:
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
-    model.train()
-    model.to(DEVICE)
-    total_loss, total_corr, total_n = 0.0, 0, 0
-    for _ in range(epochs):
-        for images, labels in loader:
-            images, labels = images.to(DEVICE), labels.to(DEVICE)
-            optimizer.zero_grad()
-            out = model(images)
-            loss = criterion(out, labels)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item() * images.size(0)
-            total_corr += out.argmax(1).eq(labels).sum().item()
-            total_n    += images.size(0)
-    return total_loss / max(total_n, 1), total_corr / max(total_n, 1)
-
-
-def eval_image_local(model: nn.Module,
-                     loader: DataLoader) -> Tuple[float, float]:
-    criterion = nn.CrossEntropyLoss()
-    model.eval()
-    model.to(DEVICE)
-    total_loss, total_corr, total_n = 0.0, 0, 0
-    with torch.no_grad():
-        for images, labels in loader:
-            images, labels = images.to(DEVICE), labels.to(DEVICE)
-            out  = model(images)
-            total_loss += criterion(out, labels).item() * images.size(0)
-            total_corr += out.argmax(1).eq(labels).sum().item()
-            total_n    += images.size(0)
-    return total_loss / max(total_n, 1), total_corr / max(total_n, 1)
 
 
 def evaluate_global_weights(weights: NDArrays) -> Tuple[float, float]:
@@ -2116,13 +1426,18 @@ def run_federated_training_image(status_callback=None, round_callback=None,
         # Os workers do Ray nao reimportam este modulo com o estado preparado;
         # serializar por valor leva as particoes e a topologia junto, como em __main__.
         from ray import cloudpickle
-        cloudpickle.register_pickle_by_value(sys.modules[__name__])
+        for module_name in (__name__, "experiment_config", "edge_network", "cifar_model"):
+            cloudpickle.register_pickle_by_value(sys.modules[module_name])
 
         client_app = ClientApp(client_fn=client_fn)
-        server_app = ServerApp(
-            config=ServerConfig(num_rounds=cfg.n_rounds),
-            strategy=strategy,
-        )
+
+        def server_fn(context: Context) -> ServerAppComponents:
+            return ServerAppComponents(
+                strategy=strategy,
+                config=ServerConfig(num_rounds=cfg.n_rounds),
+            )
+
+        server_app = ServerApp(server_fn=server_fn)
         _cb(f"Iniciando Flower ({cfg.n_rounds} rounds, {n_clients} clientes/round)...")
         _flwr_run_simulation(
             server_app=server_app,
